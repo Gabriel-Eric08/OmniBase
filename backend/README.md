@@ -74,11 +74,11 @@ Princípios do projeto:
 
 ### 1. Criar o banco e o schema
 
-O schema **não** é criado pelo Hibernate (`ddl-auto=validate`). Ele vem do script `src/main/resources/static/init.sql`:
+O schema **não** é criado pelo Hibernate (`ddl-auto=validate`). Ele vem do script `src/main/resources/db/init.sql`:
 
 ```bash
 createdb -U postgres omnibase
-psql -U postgres -d omnibase -f src/main/resources/static/init.sql
+psql -U postgres -d omnibase -f src/main/resources/db/init.sql
 ```
 
 O script é idempotente (`CREATE ... IF NOT EXISTS`) e habilita a extensão `pgcrypto`, usada por `gen_random_uuid()`.
@@ -155,7 +155,7 @@ src/main/java/com/secmulher/
     └── seed/               # DemoDataSeeder (profile "seed")
 src/main/resources/
 ├── application.properties
-└── static/init.sql         # Schema do banco
+└── db/init.sql             # Schema do banco (fora de static/, não é publicado via HTTP)
 ```
 
 ---
