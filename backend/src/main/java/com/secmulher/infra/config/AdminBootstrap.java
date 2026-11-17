@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
@@ -13,7 +14,9 @@ import com.secmulher.infra.repositories.UserRepository;
 
 // Cria o primeiro administrador quando o banco não tem nenhum usuário (ADMIN_EMAIL/ADMIN_PASSWORD).
 // Sem isso, ninguém conseguiria entrar, já que criar usuários exige ser administrador.
+// Roda antes do seed de demonstração, que também cria usuários.
 @Component
+@Order(1)
 public class AdminBootstrap implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(AdminBootstrap.class);
 
