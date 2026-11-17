@@ -1,5 +1,7 @@
 package com.secmulher.domain.services;
 
+import java.util.UUID;
+
 import org.springframework.stereotype.Service;
 
 import com.secmulher.infra.entities.User;
@@ -17,7 +19,7 @@ public class UserService {
         return userRepository.findByEmail(email).isPresent();
     }
 
-    public User getUserById(Long id) {
+    public User getUserById(UUID id) {
         return userRepository.findById(id).orElse(null);
     }
 }

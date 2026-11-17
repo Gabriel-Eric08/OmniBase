@@ -1,6 +1,7 @@
 package com.secmulher.infra.entities;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -9,8 +10,12 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
+@Getter
+@Setter
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
@@ -19,8 +24,8 @@ import lombok.NoArgsConstructor;
 public class User {
 
     @Id
-    @GeneratedValue(strategy = jakarta.persistence.GenerationType.AUTO)
-    private Long id;
+    @GeneratedValue(strategy = jakarta.persistence.GenerationType.UUID)
+    private UUID id;
 
     @Column(name = "name", nullable = false)
     private String name;
@@ -28,15 +33,18 @@ public class User {
     @Column (name = "email", nullable = false, unique = true)
     private String email;
 
-    @Column (name = "is_active", nullable = false)
+    @Column (name = "password_hash", nullable = false)
+    private String passwordHash;
+
+    @Column (name = "is_active")
     private Boolean isActive;
 
-    @Column (name = "is_global_admin", nullable = false)
+    @Column (name = "is_global_admin")
     private Boolean isGlobalAdmin;
 
-    @Column (name = "created_at", nullable = false)
+    @Column (name = "created_at")
     private LocalDateTime createdAt;
 
-    @Column (name = "updated_at", nullable = false)
+    @Column (name = "updated_at")
     private LocalDateTime updatedAt;
 }
