@@ -1,9 +1,17 @@
 -- ==============================================================================
+-- INICIALIZAÇÃO E EXTENSÕES
+-- ==============================================================================
+
+-- Garante que a função gen_random_uuid() esteja disponível no banco de dados
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+
+-- ==============================================================================
 -- 1. MÓDULO DE AUTENTICAÇÃO E PERMISSÕES (ACL)
 -- ==============================================================================
 
 -- Tabela Base de Usuários
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
@@ -15,17 +23,17 @@ CREATE TABLE users (
 );
 
 -- Tabela Central de Categorias (Lista oficial do que existe no sistema)
-CREATE TABLE categories (
+CREATE TABLE IF NOT EXISTS categories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) UNIQUE NOT NULL,       -- Ex: 'Mulher', 'Município'
     entity_type VARCHAR(50) NOT NULL,        -- Define se é 'native' ou 'dynamic'
-    table_reference VARCHAR(100) NOT NULL,   -- Tabela no banco (ex: 'mulheres' ou 'dynamic_entities')
+    table_reference VARCHAR(100) NOT NULL,   -- Tabela no banco (ex: 'clients' ou 'dynamic_entities')
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Matriz de Permissões (Controle ultra-granular por usuário e por coluna)
-CREATE TABLE permissions (
+CREATE TABLE IF NOT EXISTS permissions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     category_id UUID NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
@@ -50,7 +58,7 @@ CREATE TABLE permissions (
 
 -- Tabela de Categoria Nativa: Clientes (Atendidas / Mulheres)
 -- (Alta performance, regras de negócio rígidas)
-CREATE TABLE clients (
+CREATE TABLE IF NOT EXISTS clients (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     nome VARCHAR(255) NOT NULL,
     data_nascimento DATE,
@@ -62,7 +70,7 @@ CREATE TABLE clients (
 );
 
 -- Tabela de Categorias Genéricas (Dinâmicas)
-CREATE TABLE dynamic_entities (
+CREATE TABLE IF NOT EXISTS dynamic_entities (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     category_id UUID NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
     custom_fields JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -72,11 +80,11 @@ CREATE TABLE dynamic_entities (
 );
 
 -- Índices para listagem por categoria e buscas por conteúdo (operador @>)
-CREATE INDEX idx_dynamic_entities_category ON dynamic_entities(category_id);
-CREATE INDEX idx_dynamic_entities_custom_fields ON dynamic_entities USING GIN (custom_fields);
+CREATE INDEX IF NOT EXISTS idx_dynamic_entities_category ON dynamic_entities(category_id);
+CREATE INDEX IF NOT EXISTS idx_dynamic_entities_custom_fields ON dynamic_entities USING GIN (custom_fields);
 
 -- Definição dos campos customizáveis de cada categoria dinâmica (o "formulário")
-CREATE TABLE category_fields (
+CREATE TABLE IF NOT EXISTS category_fields (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     category_id UUID NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
     field_key VARCHAR(100) NOT NULL,         -- Chave usada no JSONB (ex: 'bairro')
@@ -89,14 +97,15 @@ CREATE TABLE category_fields (
     UNIQUE(category_id, field_key)
 );
 
+
 -- ==============================================================================
 -- 3. MÓDULO DE HISTÓRICO / LEDGER
 -- ==============================================================================
 
 -- Diário Universal e Imutável de Atividades
-CREATE TABLE activities_ledger (
+CREATE TABLE IF NOT EXISTS activities_ledger (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    -- Polimorfismo: Qual tabela? (Ex: 'mulheres' ou 'dynamic_entities')
+    -- Polimorfismo: Qual tabela? (Ex: 'clients' ou 'dynamic_entities')
     entity_type VARCHAR(100) NOT NULL, 
     -- Polimorfismo: Qual registro específico dentro da tabela?
     entity_id UUID NOT NULL, 
@@ -122,8 +131,8 @@ CREATE TABLE activities_ledger (
 );
 
 -- Índices de performance cruciais para tabelas polimórficas gigantes
-CREATE INDEX idx_ledger_polymorphic ON activities_ledger(entity_type, entity_id);
-CREATE INDEX idx_ledger_user ON activities_ledger(user_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_polymorphic ON activities_ledger(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_user ON activities_ledger(user_id);
 
 
 -- ==============================================================================
@@ -131,7 +140,7 @@ CREATE INDEX idx_ledger_user ON activities_ledger(user_id);
 -- ==============================================================================
 
 -- Repositório Único de Documentos e Anexos
-CREATE TABLE files (
+CREATE TABLE IF NOT EXISTS files (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     -- Polimorfismo (Idêntico ao do Ledger)
     entity_type VARCHAR(100) NOT NULL, 
@@ -152,4 +161,4 @@ CREATE TABLE files (
 );
 
 -- Índice para buscas rápidas ao abrir a pasta de anexos de um registro
-CREATE INDEX idx_files_polymorphic ON files(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_files_polymorphic ON files(entity_type, entity_id);
