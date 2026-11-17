@@ -3,6 +3,8 @@ package com.secmulher.infra.entities;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+import org.hibernate.annotations.CreationTimestamp;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -54,6 +56,7 @@ public class FileRecord {
     @Column(name = "file_size_bytes")
     private Long fileSizeBytes;
 
-    @Column(name = "uploaded_at")
+    @CreationTimestamp
+    @Column(name = "uploaded_at", updatable = false)
     private LocalDateTime uploadedAt;
 }
