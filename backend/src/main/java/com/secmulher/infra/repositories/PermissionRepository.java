@@ -1,6 +1,7 @@
 package com.secmulher.infra.repositories;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -9,6 +10,8 @@ import com.secmulher.infra.entities.Permission;
 
 public interface PermissionRepository extends JpaRepository<Permission, UUID> {
     List<Permission> findByUserId(UUID userId);
+
+    Optional<Permission> findByUserIdAndCategoryId(UUID userId, UUID categoryId);
 
     boolean existsByUserIdAndCategoryId(UUID userId, UUID categoryId);
 }

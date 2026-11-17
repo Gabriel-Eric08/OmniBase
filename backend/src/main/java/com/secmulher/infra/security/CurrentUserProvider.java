@@ -3,21 +3,18 @@ package com.secmulher.infra.security;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 
-import com.secmulher.domain.exceptions.BusinessException;
-import com.secmulher.domain.exceptions.NotFoundException;
+import com.secmulher.domain.exceptions.UnauthorizedException;
 import com.secmulher.infra.entities.User;
 import com.secmulher.infra.repositories.UserRepository;
 
-// Identificação PROVISÓRIA do usuário pelo cabeçalho X-User-Id, até a autenticação JWT existir.
-// Quando o JWT entrar, basta trocar a implementação para ler do SecurityContext.
+// Resolve o usuário autenticado a partir do JWT validado pelo Spring Security
 @Component
 public class CurrentUserProvider {
-    public static final String HEADER = "X-User-Id";
-
     final UserRepository userRepository;
 
     public CurrentUserProvider(UserRepository userRepository) {
@@ -25,23 +22,21 @@ public class CurrentUserProvider {
     }
 
     public Optional<User> getCurrentUser() {
-        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes)) {
-            return Optional.empty();
-        }
-
-        String rawId = attributes.getRequest().getHeader(HEADER);
-        if (rawId == null || rawId.isBlank()) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
             return Optional.empty();
         }
 
         UUID userId;
         try {
-            userId = UUID.fromString(rawId.trim());
-        } catch (IllegalArgumentException ex) {
-            throw new BusinessException("Cabeçalho " + HEADER + " inválido: " + rawId);
+            userId = UUID.fromString(jwtAuthentication.getToken().getSubject());
+        } catch (IllegalArgumentException | NullPointerException ex) {
+            throw new UnauthorizedException("Token inválido");
         }
 
+        // Usuário excluído ou desativado perde o acesso imediatamente, mesmo com token válido
         return Optional.of(userRepository.findById(userId)
-            .orElseThrow(() -> new NotFoundException("Usuário do cabeçalho " + HEADER + " não encontrado: " + userId)));
+            .filter(user -> Boolean.TRUE.equals(user.getIsActive()))
+            .orElseThrow(() -> new UnauthorizedException("Usuário inexistente ou inativo")));
     }
 }

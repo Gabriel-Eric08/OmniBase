@@ -17,6 +17,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.secmulher.domain.access.AccessControlService;
+import com.secmulher.domain.access.CategoryAccess;
 import com.secmulher.domain.dtos.FileDtos.FileDownload;
 import com.secmulher.domain.dtos.FileDtos.FileResponse;
 import com.secmulher.domain.dtos.FileDtos.FileUpdateRequest;
@@ -30,6 +32,8 @@ import com.secmulher.infra.repositories.FileRecordRepository;
 import com.secmulher.infra.security.CurrentUserProvider;
 import com.secmulher.infra.storage.FileStorage;
 
+// Acesso a documentos = permissão na categoria do registro + nível de sigilo do documento
+// dentro do limite da permissão (max_confidentiality)
 @Service
 public class FileService {
     private static final Logger log = LoggerFactory.getLogger(FileService.class);
@@ -39,14 +43,17 @@ public class FileService {
     final RecordService recordService;
     final ActivityService activityService;
     final CurrentUserProvider currentUserProvider;
+    final AccessControlService accessControl;
 
     public FileService(FileRecordRepository fileRecordRepository, FileStorage fileStorage,
-            RecordService recordService, ActivityService activityService, CurrentUserProvider currentUserProvider) {
+            RecordService recordService, ActivityService activityService, CurrentUserProvider currentUserProvider,
+            AccessControlService accessControl) {
         this.fileRecordRepository = fileRecordRepository;
         this.fileStorage = fileStorage;
         this.recordService = recordService;
         this.activityService = activityService;
         this.currentUserProvider = currentUserProvider;
+        this.accessControl = accessControl;
     }
 
     private FileRecord getFileById(UUID id) {
@@ -54,22 +61,34 @@ public class FileService {
             .orElseThrow(() -> new NotFoundException("Arquivo não encontrado: " + id));
     }
 
-    private static RecordType recordTypeOf(FileRecord file) {
-        return file.getEntityType().equals(RecordType.CLIENT.getTableName())
-            ? RecordType.CLIENT
-            : RecordType.DYNAMIC_ENTITY;
+    private CategoryAccess accessFor(FileRecord file) {
+        return accessControl.forRecord(RecordType.fromTableName(file.getEntityType()), file.getEntityId());
+    }
+
+    // Detalhes gravados no histórico; "sigilo" permite ocultar o evento de quem não tem o nível
+    private static Map<String, Object> details(FileRecord file) {
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("arquivo", file.getOriginalName());
+        details.put("sigilo", file.getConfidentialityLevel().name());
+        return details;
     }
 
     @Transactional(readOnly = true)
     public List<FileResponse> findAll(RecordType type, UUID recordId) {
         recordService.ensureExists(type, recordId);
+        CategoryAccess access = accessControl.forRecord(type, recordId).requireRead();
         return fileRecordRepository.findByEntityTypeAndEntityIdOrderByUploadedAtDesc(type.getTableName(), recordId)
-            .stream().map(FileResponse::from).toList();
+            .stream()
+            .filter(file -> access.canAccess(file.getConfidentialityLevel()))
+            .map(FileResponse::from)
+            .toList();
     }
 
     @Transactional(readOnly = true)
     public FileResponse findById(UUID id) {
-        return FileResponse.from(getFileById(id));
+        FileRecord file = getFileById(id);
+        accessFor(file).requireRead().requireConfidentiality(file.getConfidentialityLevel());
+        return FileResponse.from(file);
     }
 
     @Transactional
@@ -78,6 +97,7 @@ public class FileService {
             throw new BusinessException("Nenhum arquivo enviado");
         }
         recordService.ensureExists(type, recordId);
+        accessControl.forRecord(type, recordId).requireUpdate().requireConfidentiality(level);
 
         // O nome físico é um UUID; o nome original só é guardado como metadado
         String storagePath = type.getTableName() + "/" + recordId + "/" + UUID.randomUUID();
@@ -101,11 +121,7 @@ public class FileService {
             .confidentialityLevel(level)
             .build());
 
-        Map<String, Object> details = new LinkedHashMap<>();
-        details.put("arquivo", originalName);
-        details.put("sigilo", level.name());
-        activityService.record(type, recordId, ActivityType.FILE_UPLOADED, "Documento anexado: " + originalName, details);
-
+        activityService.record(type, recordId, ActivityType.FILE_UPLOADED, "Documento anexado: " + originalName, details(file));
         return FileResponse.from(file);
     }
 
@@ -113,10 +129,11 @@ public class FileService {
     @Transactional
     public FileDownload download(UUID id) {
         FileRecord file = getFileById(id);
+        accessFor(file).requireRead().requireConfidentiality(file.getConfidentialityLevel());
 
         if (file.getConfidentialityLevel() != ConfidentialityLevel.INTERNAL) {
-            activityService.record(recordTypeOf(file), file.getEntityId(), ActivityType.FILE_DOWNLOADED,
-                "Documento acessado: " + file.getOriginalName(), null);
+            activityService.record(RecordType.fromTableName(file.getEntityType()), file.getEntityId(),
+                ActivityType.FILE_DOWNLOADED, "Documento acessado: " + file.getOriginalName(), details(file));
         }
 
         return new FileDownload(file.getOriginalName(), file.getContentType(), fileStorage.load(file.getStoragePath()));
@@ -125,13 +142,17 @@ public class FileService {
     @Transactional
     public FileResponse updateConfidentiality(UUID id, FileUpdateRequest request) {
         FileRecord file = getFileById(id);
+        ConfidentialityLevel previous = file.getConfidentialityLevel();
+        CategoryAccess access = accessFor(file).requireUpdate();
+        access.requireConfidentiality(previous);
+        access.requireConfidentiality(request.confidentialityLevel());
 
-        Map<String, Object> changes = new LinkedHashMap<>();
-        ActivityService.trackChange(changes, "sigilo", file.getConfidentialityLevel(), request.confidentialityLevel());
-        if (!changes.isEmpty()) {
+        if (previous != request.confidentialityLevel()) {
             file.setConfidentialityLevel(request.confidentialityLevel());
-            activityService.record(recordTypeOf(file), file.getEntityId(), ActivityType.FILE_UPDATED,
-                "Nível de sigilo alterado: " + file.getOriginalName(), changes);
+            Map<String, Object> details = details(file);
+            details.put("sigilo_anterior", previous.name());
+            activityService.record(RecordType.fromTableName(file.getEntityType()), file.getEntityId(),
+                ActivityType.FILE_UPDATED, "Nível de sigilo alterado: " + file.getOriginalName(), details);
         }
 
         return FileResponse.from(fileRecordRepository.saveAndFlush(file));
@@ -140,14 +161,15 @@ public class FileService {
     @Transactional
     public void delete(UUID id) {
         FileRecord file = getFileById(id);
+        accessFor(file).requireDelete().requireConfidentiality(file.getConfidentialityLevel());
 
-        activityService.record(recordTypeOf(file), file.getEntityId(), ActivityType.FILE_REMOVED,
-            "Documento removido: " + file.getOriginalName(), null);
+        activityService.record(RecordType.fromTableName(file.getEntityType()), file.getEntityId(),
+            ActivityType.FILE_REMOVED, "Documento removido: " + file.getOriginalName(), details(file));
         fileRecordRepository.delete(file);
         runAfterCommit(() -> fileStorage.delete(file.getStoragePath()));
     }
 
-    // Usado quando o registro dono dos arquivos é excluído
+    // Usado quando o registro dono dos arquivos é excluído (a permissão já foi checada por quem chama)
     @Transactional
     public void deleteAllFor(RecordType type, UUID recordId) {
         List<FileRecord> files = fileRecordRepository

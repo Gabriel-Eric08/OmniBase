@@ -34,7 +34,8 @@ public final class ActivityDtos {
         Map<String, Object> changes,
         String responsibleEmployee,
         LocalDateTime occurredAt,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        boolean redacted
     ) {
         public static ActivityResponse from(ActivityLedger activity) {
             return new ActivityResponse(
@@ -48,8 +49,15 @@ public final class ActivityDtos {
                 activity.getChanges(),
                 activity.getResponsibleEmployee(),
                 activity.getOccurredAt(),
-                activity.getCreatedAt()
+                activity.getCreatedAt(),
+                false
             );
+        }
+
+        // Cópia com conteúdo ocultado para quem não tem acesso a parte das informações
+        public ActivityResponse redact(String newDescription, Map<String, Object> newChanges) {
+            return new ActivityResponse(id, entityType, entityId, userId, userName, actionType,
+                newDescription, newChanges, responsibleEmployee, occurredAt, createdAt, true);
         }
     }
 }

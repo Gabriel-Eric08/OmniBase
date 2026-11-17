@@ -11,6 +11,8 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.secmulher.domain.access.AccessControlService;
+import com.secmulher.domain.access.CategoryAccess;
 import com.secmulher.domain.dtos.CategoryFieldDtos.CategoryFieldRequest;
 import com.secmulher.domain.dtos.CategoryFieldDtos.CategoryFieldResponse;
 import com.secmulher.domain.exceptions.BusinessException;
@@ -28,12 +30,15 @@ public class CategoryFieldService {
     final CategoryFieldRepository categoryFieldRepository;
     final DynamicEntityRepository dynamicEntityRepository;
     final CategoryService categoryService;
+    final AccessControlService accessControl;
 
     public CategoryFieldService(CategoryFieldRepository categoryFieldRepository,
-            DynamicEntityRepository dynamicEntityRepository, CategoryService categoryService) {
+            DynamicEntityRepository dynamicEntityRepository, CategoryService categoryService,
+            AccessControlService accessControl) {
         this.categoryFieldRepository = categoryFieldRepository;
         this.dynamicEntityRepository = dynamicEntityRepository;
         this.categoryService = categoryService;
+        this.accessControl = accessControl;
     }
 
     private Category getDynamicCategory(UUID categoryId) {
@@ -65,14 +70,20 @@ public class CategoryFieldService {
         return categoryFieldRepository.findByCategoryIdOrderByPositionAscLabelAsc(categoryId);
     }
 
+    // Cada usuário só vê a definição dos campos que pode ler
     @Transactional(readOnly = true)
     public List<CategoryFieldResponse> findAll(UUID categoryId) {
         categoryService.getCategoryById(categoryId);
-        return getFields(categoryId).stream().map(CategoryFieldResponse::from).toList();
+        CategoryAccess access = accessControl.forCategory(categoryId).requireRead();
+        return getFields(categoryId).stream()
+            .filter(field -> access.canReadColumn(field.getKey()))
+            .map(CategoryFieldResponse::from)
+            .toList();
     }
 
     @Transactional
     public CategoryFieldResponse create(UUID categoryId, CategoryFieldRequest request) {
+        accessControl.requireAdmin();
         Category category = getDynamicCategory(categoryId);
         if (categoryFieldRepository.existsByCategoryIdAndKey(categoryId, request.key())) {
             throw new ConflictException("Já existe um campo com a chave '" + request.key() + "' nesta categoria");
@@ -93,6 +104,7 @@ public class CategoryFieldService {
 
     @Transactional
     public CategoryFieldResponse update(UUID categoryId, UUID fieldId, CategoryFieldRequest request) {
+        accessControl.requireAdmin();
         CategoryField field = getField(categoryId, fieldId);
 
         if (!field.getKey().equals(request.key())) {
@@ -115,6 +127,7 @@ public class CategoryFieldService {
     // Sem purgeData, recusa remover um campo que ainda tem dados em algum registro
     @Transactional
     public void delete(UUID categoryId, UUID fieldId, boolean purgeData) {
+        accessControl.requireAdmin();
         CategoryField field = getField(categoryId, fieldId);
 
         if (purgeData) {

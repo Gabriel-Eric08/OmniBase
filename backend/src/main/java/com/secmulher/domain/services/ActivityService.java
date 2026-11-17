@@ -5,11 +5,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.secmulher.domain.access.AccessControlService;
+import com.secmulher.domain.access.CategoryAccess;
 import com.secmulher.domain.dtos.ActivityDtos.ActivityResponse;
 import com.secmulher.domain.dtos.ActivityDtos.ManualActivityRequest;
 import com.secmulher.domain.enums.RecordType;
@@ -17,23 +20,31 @@ import com.secmulher.domain.exceptions.BusinessException;
 import com.secmulher.domain.exceptions.NotFoundException;
 import com.secmulher.infra.entities.ActivityLedger;
 import com.secmulher.infra.entities.enums.ActivityType;
+import com.secmulher.infra.entities.enums.ConfidentialityLevel;
 import com.secmulher.infra.repositories.ActivityLedgerRepository;
 import com.secmulher.infra.repositories.UserRepository;
 import com.secmulher.infra.security.CurrentUserProvider;
 
 @Service
 public class ActivityService {
+    // Chaves de "changes" que não são colunas e por isso não passam pelo filtro de colunas
+    private static final Set<String> NON_COLUMN_KEYS = Set.of("categoria");
+    private static final Set<ActivityType> FILE_EVENTS = Set.of(ActivityType.FILE_UPLOADED, ActivityType.FILE_UPDATED,
+        ActivityType.FILE_REMOVED, ActivityType.FILE_DOWNLOADED);
+
     final ActivityLedgerRepository activityLedgerRepository;
     final UserRepository userRepository;
     final RecordService recordService;
     final CurrentUserProvider currentUserProvider;
+    final AccessControlService accessControl;
 
     public ActivityService(ActivityLedgerRepository activityLedgerRepository, UserRepository userRepository,
-            RecordService recordService, CurrentUserProvider currentUserProvider) {
+            RecordService recordService, CurrentUserProvider currentUserProvider, AccessControlService accessControl) {
         this.activityLedgerRepository = activityLedgerRepository;
         this.userRepository = userRepository;
         this.recordService = recordService;
         this.currentUserProvider = currentUserProvider;
+        this.accessControl = accessControl;
     }
 
     // Adiciona {"campo": {"antigo": ..., "novo": ...}} ao mapa de mudanças, se o valor mudou
@@ -50,13 +61,18 @@ public class ActivityService {
     @Transactional(readOnly = true)
     public List<ActivityResponse> getTimeline(RecordType type, UUID recordId) {
         recordService.ensureExists(type, recordId);
+        CategoryAccess access = accessControl.forRecord(type, recordId).requireRead();
         return activityLedgerRepository
             .findByEntityTypeAndEntityIdOrderByOccurredAtDescCreatedAtDesc(type.getTableName(), recordId)
-            .stream().map(ActivityResponse::from).toList();
+            .stream()
+            .map(activity -> applyAccess(ActivityResponse.from(activity), access))
+            .toList();
     }
 
+    // Auditoria: o administrador vê as ações de qualquer usuário; cada usuário vê as próprias
     @Transactional(readOnly = true)
     public List<ActivityResponse> getByUser(UUID userId) {
+        accessControl.requireAdminOrSelf(userId);
         if (!userRepository.existsById(userId)) {
             throw new NotFoundException("Usuário não encontrado: " + userId);
         }
@@ -64,12 +80,14 @@ public class ActivityService {
             .stream().map(ActivityResponse::from).toList();
     }
 
+    // Registrar atendimento faz parte de editar o acompanhamento do registro
     @Transactional
     public ActivityResponse createManual(RecordType type, UUID recordId, ManualActivityRequest request) {
         if (!request.actionType().isManual()) {
             throw new BusinessException("O tipo " + request.actionType() + " é reservado para registros automáticos do sistema");
         }
         recordService.ensureExists(type, recordId);
+        accessControl.forRecord(type, recordId).requireUpdate();
 
         ActivityLedger activity = ActivityLedger.builder()
             .entityType(type.getTableName())
@@ -99,5 +117,33 @@ public class ActivityService {
             .build();
 
         activityLedgerRepository.save(activity);
+    }
+
+    // O histórico não pode vazar o que o usuário não pode ver: valores de colunas ocultas
+    // e nomes de documentos acima do seu nível de sigilo
+    private ActivityResponse applyAccess(ActivityResponse activity, CategoryAccess access) {
+        Map<String, Object> changes = activity.changes();
+        if (changes == null) {
+            return activity;
+        }
+
+        if (FILE_EVENTS.contains(activity.actionType())) {
+            boolean allowed = Set.of("sigilo", "sigilo_anterior").stream()
+                .map(changes::get)
+                .filter(Objects::nonNull)
+                .allMatch(level -> access.canAccess(ConfidentialityLevel.valueOf(String.valueOf(level))));
+            return allowed ? activity : activity.redact("Documento com nível de sigilo acima do seu acesso", null);
+        }
+
+        if (access.readableColumns() == null) {
+            return activity;
+        }
+        Map<String, Object> visible = new LinkedHashMap<>();
+        changes.forEach((key, value) -> {
+            if (access.canReadColumn(key) || NON_COLUMN_KEYS.contains(key)) {
+                visible.put(key, value);
+            }
+        });
+        return visible.size() == changes.size() ? activity : activity.redact(activity.description(), visible);
     }
 }

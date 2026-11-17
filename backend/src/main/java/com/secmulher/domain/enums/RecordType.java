@@ -31,4 +31,11 @@ public enum RecordType {
             .findFirst()
             .orElseThrow(() -> new NotFoundException("Tipo de registro desconhecido: " + path));
     }
+
+    public static RecordType fromTableName(String tableName) {
+        return Arrays.stream(values())
+            .filter(type -> type.tableName.equals(tableName))
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("Tabela polimórfica desconhecida: " + tableName));
+    }
 }

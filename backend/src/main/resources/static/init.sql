@@ -35,7 +35,10 @@ CREATE TABLE permissions (
     can_delete BOOLEAN DEFAULT FALSE,
     -- JSONB para dizer quais colunas o usuário pode ver/editar. 
     -- Ex: {"read": ["nome", "telefone", "sob_risco"], "write": ["telefone"]}
-    allowed_columns JSONB DEFAULT '{}'::jsonb, 
+    -- Sem a chave "read"/"write", todas as colunas são liberadas para aquela operação.
+    allowed_columns JSONB DEFAULT '{}'::jsonb,
+    -- Nível máximo de sigilo de documento acessível: INTERNAL, RESTRICTED ou CONFIDENTIAL
+    max_confidentiality VARCHAR(20) NOT NULL DEFAULT 'INTERNAL',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, category_id) -- Impede permissões duplicadas para o mesmo usuário na mesma categoria
 );

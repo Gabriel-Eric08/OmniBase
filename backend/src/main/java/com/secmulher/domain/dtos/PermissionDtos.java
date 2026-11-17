@@ -5,12 +5,14 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.secmulher.infra.entities.Permission;
+import com.secmulher.infra.entities.enums.ConfidentialityLevel;
 
 import jakarta.validation.constraints.NotNull;
 
 public final class PermissionDtos {
     private PermissionDtos() {}
 
+    // allowedColumns: {"read": [...], "write": [...]}; sem a chave, todas as colunas são liberadas
     public record PermissionRequest(
         @NotNull UUID userId,
         @NotNull UUID categoryId,
@@ -18,7 +20,8 @@ public final class PermissionDtos {
         Boolean canCreate,
         Boolean canUpdate,
         Boolean canDelete,
-        Map<String, Object> allowedColumns
+        Map<String, Object> allowedColumns,
+        ConfidentialityLevel maxConfidentiality
     ) {}
 
     public record PermissionResponse(
@@ -30,6 +33,7 @@ public final class PermissionDtos {
         Boolean canUpdate,
         Boolean canDelete,
         Map<String, Object> allowedColumns,
+        ConfidentialityLevel maxConfidentiality,
         LocalDateTime createdAt
     ) {
         public static PermissionResponse from(Permission permission) {
@@ -42,6 +46,7 @@ public final class PermissionDtos {
                 permission.getCanUpdate(),
                 permission.getCanDelete(),
                 permission.getAllowedColumns(),
+                permission.getMaxConfidentiality(),
                 permission.getCreatedAt()
             );
         }

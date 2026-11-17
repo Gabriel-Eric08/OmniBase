@@ -7,6 +7,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.secmulher.domain.access.AccessControlService;
 import com.secmulher.domain.dtos.CategoryDtos.CategoryRequest;
 import com.secmulher.domain.dtos.CategoryDtos.CategoryResponse;
 import com.secmulher.domain.exceptions.ConflictException;
@@ -14,12 +15,15 @@ import com.secmulher.domain.exceptions.NotFoundException;
 import com.secmulher.infra.entities.Category;
 import com.secmulher.infra.repositories.CategoryRepository;
 
+// Estrutura das categorias é gerida por administradores; os demais só enxergam as que podem ler
 @Service
 public class CategoryService {
     final CategoryRepository categoryRepository;
+    final AccessControlService accessControl;
 
-    public CategoryService(CategoryRepository categoryRepository) {
+    public CategoryService(CategoryRepository categoryRepository, AccessControlService accessControl) {
         this.categoryRepository = categoryRepository;
+        this.accessControl = accessControl;
     }
 
     public Category getCategoryById(UUID id) {
@@ -29,16 +33,22 @@ public class CategoryService {
 
     @Transactional(readOnly = true)
     public List<CategoryResponse> findAll() {
-        return categoryRepository.findAll().stream().map(CategoryResponse::from).toList();
+        List<Category> categories = accessControl.isAdmin()
+            ? categoryRepository.findAll()
+            : categoryRepository.findAllById(accessControl.readableCategoryIds());
+        return categories.stream().map(CategoryResponse::from).toList();
     }
 
     @Transactional(readOnly = true)
     public CategoryResponse findById(UUID id) {
-        return CategoryResponse.from(getCategoryById(id));
+        Category category = getCategoryById(id);
+        accessControl.forCategory(id).requireRead();
+        return CategoryResponse.from(category);
     }
 
     @Transactional
     public CategoryResponse create(CategoryRequest request) {
+        accessControl.requireAdmin();
         if (categoryRepository.existsByName(request.name())) {
             throw new ConflictException("Já existe uma categoria com o nome: " + request.name());
         }
@@ -55,6 +65,7 @@ public class CategoryService {
 
     @Transactional
     public CategoryResponse update(UUID id, CategoryRequest request) {
+        accessControl.requireAdmin();
         Category category = getCategoryById(id);
 
         if (!category.getName().equals(request.name()) && categoryRepository.existsByName(request.name())) {
@@ -73,6 +84,7 @@ public class CategoryService {
 
     @Transactional
     public void delete(UUID id) {
+        accessControl.requireAdmin();
         categoryRepository.delete(getCategoryById(id));
     }
 }

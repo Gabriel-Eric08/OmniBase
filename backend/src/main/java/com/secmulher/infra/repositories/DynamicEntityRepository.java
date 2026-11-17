@@ -1,5 +1,6 @@
 package com.secmulher.infra.repositories;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -12,6 +13,8 @@ import com.secmulher.infra.entities.DynamicEntity;
 
 public interface DynamicEntityRepository extends JpaRepository<DynamicEntity, UUID> {
     List<DynamicEntity> findByCategoryId(UUID categoryId);
+
+    List<DynamicEntity> findByCategoryIdIn(Collection<UUID> categoryIds);
 
     // Busca por conteúdo do JSONB usando o operador @> (aproveita o índice GIN)
     @Query(value = """

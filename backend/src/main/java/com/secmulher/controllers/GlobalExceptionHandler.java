@@ -14,7 +14,9 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import com.secmulher.domain.exceptions.BusinessException;
 import com.secmulher.domain.exceptions.ConflictException;
 import com.secmulher.domain.exceptions.FieldValidationException;
+import com.secmulher.domain.exceptions.ForbiddenException;
 import com.secmulher.domain.exceptions.NotFoundException;
+import com.secmulher.domain.exceptions.UnauthorizedException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -22,6 +24,16 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NotFoundException.class)
     public ProblemDetail handleNotFound(NotFoundException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
+    @ExceptionHandler(UnauthorizedException.class)
+    public ProblemDetail handleUnauthorized(UnauthorizedException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, ex.getMessage());
+    }
+
+    @ExceptionHandler(ForbiddenException.class)
+    public ProblemDetail handleForbidden(ForbiddenException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, ex.getMessage());
     }
 
     @ExceptionHandler(ConflictException.class)

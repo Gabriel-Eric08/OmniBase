@@ -1,5 +1,6 @@
 package com.secmulher.domain.services;
 
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -10,20 +11,24 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.secmulher.domain.access.AccessControlService;
+import com.secmulher.domain.access.CategoryAccess;
 import com.secmulher.domain.dtos.DynamicEntityDtos.DynamicEntityRequest;
 import com.secmulher.domain.dtos.DynamicEntityDtos.DynamicEntityResponse;
 import com.secmulher.domain.dtos.DynamicEntityDtos.DynamicEntitySearchRequest;
 import com.secmulher.domain.enums.RecordType;
 import com.secmulher.domain.exceptions.BusinessException;
+import com.secmulher.domain.exceptions.ForbiddenException;
 import com.secmulher.domain.exceptions.NotFoundException;
 import com.secmulher.infra.entities.Category;
 import com.secmulher.infra.entities.DynamicEntity;
 import com.secmulher.infra.entities.enums.ActivityType;
 import com.secmulher.infra.repositories.DynamicEntityRepository;
-import com.secmulher.infra.security.CurrentUserProvider;
 
 import tools.jackson.databind.json.JsonMapper;
 
+// Regras de coluna: na criação, campos sem permissão de escrita não podem ser enviados;
+// na edição, eles são preservados com o valor atual, independentemente do que vier.
 @Service
 public class DynamicEntityService {
     final DynamicEntityRepository dynamicEntityRepository;
@@ -31,18 +36,18 @@ public class DynamicEntityService {
     final CategoryFieldService categoryFieldService;
     final ActivityService activityService;
     final FileService fileService;
-    final CurrentUserProvider currentUserProvider;
+    final AccessControlService accessControl;
     final JsonMapper jsonMapper;
 
     public DynamicEntityService(DynamicEntityRepository dynamicEntityRepository, CategoryService categoryService,
             CategoryFieldService categoryFieldService, ActivityService activityService, FileService fileService,
-            CurrentUserProvider currentUserProvider, JsonMapper jsonMapper) {
+            AccessControlService accessControl, JsonMapper jsonMapper) {
         this.dynamicEntityRepository = dynamicEntityRepository;
         this.categoryService = categoryService;
         this.categoryFieldService = categoryFieldService;
         this.activityService = activityService;
         this.fileService = fileService;
-        this.currentUserProvider = currentUserProvider;
+        this.accessControl = accessControl;
         this.jsonMapper = jsonMapper;
     }
 
@@ -51,7 +56,7 @@ public class DynamicEntityService {
             .orElseThrow(() -> new NotFoundException("Registro não encontrado: " + id));
     }
 
-    // Só categorias do tipo 'dynamic' guardam registros em dynamic_entities
+    // Só categorias do tipo 'dynamic' e ativas recebem registros em dynamic_entities
     private Category getDynamicCategory(UUID categoryId) {
         Category category = categoryService.getCategoryById(categoryId);
         if (!"dynamic".equals(category.getEntityType())) {
@@ -63,56 +68,106 @@ public class DynamicEntityService {
         return category;
     }
 
+    private static void rejectNonWritable(Map<String, Object> values, CategoryAccess access) {
+        List<String> forbidden = values.entrySet().stream()
+            .filter(entry -> entry.getValue() != null && !access.canWriteColumn(entry.getKey()))
+            .map(Map.Entry::getKey)
+            .sorted()
+            .toList();
+        if (!forbidden.isEmpty()) {
+            throw new ForbiddenException("Sem permissão para preencher: " + String.join(", ", forbidden));
+        }
+    }
+
     @Transactional(readOnly = true)
     public List<DynamicEntityResponse> findAll(UUID categoryId) {
-        List<DynamicEntity> entities = categoryId != null
-            ? dynamicEntityRepository.findByCategoryId(categoryId)
-            : dynamicEntityRepository.findAll();
-        return entities.stream().map(DynamicEntityResponse::from).toList();
+        if (categoryId != null) {
+            CategoryAccess access = accessControl.forCategory(categoryId).requireRead();
+            return dynamicEntityRepository.findByCategoryId(categoryId).stream()
+                .map(entity -> DynamicEntityResponse.from(entity, access))
+                .toList();
+        }
+
+        // Sem filtro: só registros das categorias que o usuário pode ler
+        List<DynamicEntity> entities = accessControl.isAdmin()
+            ? dynamicEntityRepository.findAll()
+            : dynamicEntityRepository.findByCategoryIdIn(accessControl.readableCategoryIds());
+        Map<UUID, CategoryAccess> accessByCategory = new HashMap<>();
+        return entities.stream()
+            .map(entity -> DynamicEntityResponse.from(entity, accessByCategory.computeIfAbsent(
+                entity.getCategory().getId(), accessControl::forCategory)))
+            .toList();
     }
 
     @Transactional(readOnly = true)
     public DynamicEntityResponse findById(UUID id) {
-        return DynamicEntityResponse.from(getDynamicEntityById(id));
+        DynamicEntity entity = getDynamicEntityById(id);
+        CategoryAccess access = accessControl.forCategory(entity.getCategory().getId()).requireRead();
+        return DynamicEntityResponse.from(entity, access);
     }
 
+    // Filtrar por campo oculto revelaria o valor dele, então é proibido
     @Transactional(readOnly = true)
     public List<DynamicEntityResponse> search(DynamicEntitySearchRequest request) {
         categoryService.getCategoryById(request.categoryId());
+        CategoryAccess access = accessControl.forCategory(request.categoryId()).requireRead();
         Map<String, Object> fields = request.fields() != null ? request.fields() : Map.of();
+
+        List<String> hidden = access.hiddenColumns(fields.keySet());
+        if (!hidden.isEmpty()) {
+            throw new ForbiddenException("Sem permissão para filtrar por: " + String.join(", ", hidden));
+        }
+
         return dynamicEntityRepository.searchByCustomFields(request.categoryId(), jsonMapper.writeValueAsString(fields))
-            .stream().map(DynamicEntityResponse::from).toList();
+            .stream().map(entity -> DynamicEntityResponse.from(entity, access)).toList();
     }
 
     @Transactional
     public DynamicEntityResponse create(DynamicEntityRequest request) {
         Category category = getDynamicCategory(request.categoryId());
+        CategoryAccess access = accessControl.forCategory(category.getId()).requireCreate();
+        rejectNonWritable(request.customFields(), access);
         Map<String, Object> customFields = categoryFieldService.validateCustomFields(category.getId(), request.customFields());
 
         DynamicEntity entity = dynamicEntityRepository.saveAndFlush(DynamicEntity.builder()
             .category(category)
             .customFields(customFields)
-            .createdBy(currentUserProvider.getCurrentUser().orElse(null))
+            .createdBy(accessControl.requireUser())
             .build());
 
         activityService.record(RecordType.DYNAMIC_ENTITY, entity.getId(), ActivityType.CREATED,
             "Cadastro criado em " + category.getName(), null);
-        return DynamicEntityResponse.from(entity);
+        return DynamicEntityResponse.from(entity, access);
     }
 
     @Transactional
     public DynamicEntityResponse update(UUID id, DynamicEntityRequest request) {
         DynamicEntity entity = getDynamicEntityById(id);
+        CategoryAccess access = accessControl.forCategory(entity.getCategory().getId()).requireUpdate();
         Map<String, Object> changes = new LinkedHashMap<>();
 
+        // Mover para outra categoria exige permissão de criação no destino
         if (!entity.getCategory().getId().equals(request.categoryId())) {
             Category newCategory = getDynamicCategory(request.categoryId());
+            access = accessControl.forCategory(newCategory.getId()).requireCreate();
             ActivityService.trackChange(changes, "categoria", entity.getCategory().getName(), newCategory.getName());
             entity.setCategory(newCategory);
         }
 
-        Map<String, Object> newFields = categoryFieldService.validateCustomFields(request.categoryId(), request.customFields());
         Map<String, Object> oldFields = entity.getCustomFields() != null ? entity.getCustomFields() : Map.of();
+        Map<String, Object> merged = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : request.customFields().entrySet()) {
+            if (access.canWriteColumn(entry.getKey())) {
+                merged.put(entry.getKey(), entry.getValue());
+            }
+        }
+        for (Map.Entry<String, Object> entry : oldFields.entrySet()) {
+            if (!access.canWriteColumn(entry.getKey())) {
+                merged.put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        Map<String, Object> newFields = categoryFieldService.validateCustomFields(request.categoryId(), merged);
         Set<String> keys = new HashSet<>(oldFields.keySet());
         keys.addAll(newFields.keySet());
         keys.stream().sorted()
@@ -123,13 +178,14 @@ public class DynamicEntityService {
         if (!changes.isEmpty()) {
             activityService.record(RecordType.DYNAMIC_ENTITY, id, ActivityType.UPDATED, "Cadastro atualizado", changes);
         }
-        return DynamicEntityResponse.from(dynamicEntityRepository.saveAndFlush(entity));
+        return DynamicEntityResponse.from(dynamicEntityRepository.saveAndFlush(entity), access);
     }
 
     // O histórico permanece no ledger mesmo após a exclusão; os documentos são removidos
     @Transactional
     public void delete(UUID id) {
         DynamicEntity entity = getDynamicEntityById(id);
+        accessControl.forCategory(entity.getCategory().getId()).requireDelete();
         fileService.deleteAllFor(RecordType.DYNAMIC_ENTITY, id);
         activityService.record(RecordType.DYNAMIC_ENTITY, id, ActivityType.DELETED,
             "Cadastro excluído de " + entity.getCategory().getName(), null);
