@@ -21,6 +21,7 @@ Foi pensada para serviços de atendimento como uma Secretaria da Mulher, onde di
   - [Usuários](#usuários)
   - [Categorias](#categorias)
   - [Campos personalizados](#campos-personalizados-de-categorias-dinâmicas)
+  - [Tipos de registro da linha do tempo](#tipos-de-registro-da-linha-do-tempo)
   - [Permissões](#permissões)
   - [Clientes](#clientes)
   - [Entidades dinâmicas](#entidades-dinâmicas)
@@ -43,6 +44,7 @@ Foi pensada para serviços de atendimento como uma Secretaria da Mulher, onde di
 | **Entidade dinâmica** | Registro de uma categoria dinâmica (ex.: abrigos, cursos, municípios parceiros). Os valores ficam em JSONB e são validados contra os **campos personalizados** da categoria. |
 | **Permissão** | Liga um usuário a uma categoria: o que ele pode fazer (ler, criar, editar, excluir), **quais colunas** pode ler e escrever e o **nível máximo de sigilo** de documentos que pode acessar. |
 | **Linha do tempo** | Histórico imutável de cada registro (`activities_ledger`). Guarda ações automáticas de auditoria (criação, edição com valor antigo e novo, documentos) e atendimentos registrados manualmente. |
+| **Tipo de registro** | Os tipos de registro manual da linha do tempo, configurados pelo administrador em cada categoria (ex.: em "Mulheres atendidas", *Triagem, Atendimento psicológico, Visita domiciliar*; em "Cursos", *Matrícula, Presença, Certificado*). A permissão pode limitar quais tipos cada perfil registra. |
 | **Documento** | Arquivo anexado a um registro, com nível de sigilo `INTERNAL`, `RESTRICTED` ou `CONFIDENTIAL`. |
 
 Princípios do projeto:
@@ -80,6 +82,10 @@ psql -U postgres -d omnibase -f src/main/resources/static/init.sql
 ```
 
 O script é idempotente (`CREATE ... IF NOT EXISTS`) e habilita a extensão `pgcrypto`, usada por `gen_random_uuid()`.
+
+**Atualizando um banco existente:** rode o mesmo `init.sql` de novo. Ele acrescenta as tabelas e colunas novas (`ADD COLUMN IF NOT EXISTS`) e migra os dados, então pode ser executado quantas vezes for preciso. Sem isso, a aplicação não sobe, porque o Hibernate confere se o schema bate com as entidades. A migração dos tipos de registro:
+- cria os quatro tipos padrão (`triagem`, `atendimento`, `acompanhamento`, `anotacao`) em cada categoria que ainda não tem nenhum tipo;
+- converte as atividades manuais antigas (`TRIAGE`, `SERVICE`, `FOLLOW_UP`, `NOTE`) para `MANUAL`, apontando para o tipo correspondente da categoria do registro. As que não têm categoria identificável, como as de um registro já excluído, continuam como estão e seguem legíveis.
 
 ### 2. Criar o `.env`
 
@@ -160,14 +166,15 @@ src/main/resources/
 |---|---|
 | `users` | Usuários (`is_global_admin`, `is_active`, senha em BCrypt) |
 | `categories` | Categorias: `entity_type` (`native`/`dynamic`) e `table_reference` (ex.: `clients`) |
-| `permissions` | Matriz usuário × categoria: `can_read/create/update/delete`, `allowed_columns` (JSONB) e `max_confidentiality` |
+| `permissions` | Matriz usuário × categoria: `can_read/create/update/delete`, `allowed_columns` (JSONB), `max_confidentiality` e `allowed_activity_types` (JSONB, keys dos tipos de registro liberados; nulo = todos) |
 | `clients` | Pessoas atendidas (tabela nativa) |
 | `category_fields` | Definição dos campos de cada categoria dinâmica (o "formulário") |
 | `dynamic_entities` | Registros das categorias dinâmicas; valores em `custom_fields` (JSONB, com índice GIN) |
-| `activities_ledger` | Linha do tempo e auditoria de cada registro (polimórfica: `entity_type` + `entity_id`) |
+| `activity_types` | Tipos de registro manual de cada categoria: `key` (única por categoria, imutável), `label`, `description`, `color`, `position`, `is_active` |
+| `activities_ledger` | Linha do tempo e auditoria de cada registro (polimórfica: `entity_type` + `entity_id`). Registros manuais têm `action_type = 'MANUAL'`, `activity_type_id` e `activity_type_label` (o nome do tipo **no momento do registro**) |
 | `files` | Metadados dos documentos (o arquivo físico fica em `STORAGE_PATH`, com nome UUID) |
 
-> Uma categoria com registros em `dynamic_entities` não pode ser excluída enquanto eles existirem (`ON DELETE RESTRICT`). A API responde **409**.
+> Uma categoria não pode ser excluída (**409**) enquanto tiver registros em `dynamic_entities` ou se algum de seus tipos de registro já tiver sido usado na linha do tempo. Nesse caso, desative-a com `isActive: false`.
 
 ---
 
@@ -206,7 +213,8 @@ Detalhes:
   "canUpdate": true,
   "canDelete": false,
   "allowedColumns": { "read": ["nome", "telefone"], "write": ["telefone"] },
-  "maxConfidentiality": "RESTRICTED"
+  "maxConfidentiality": "RESTRICTED",
+  "allowedActivityTypes": ["triagem", "atendimento", "visita_domiciliar"]
 }
 ```
 
@@ -221,6 +229,7 @@ Detalhes:
 | Filtrar ou ordenar por coluna oculta | 403, porque o resultado revelaria o valor |
 | Documentos | Só aparecem e podem ser baixados se o sigilo for ≤ `maxConfidentiality` (`INTERNAL` < `RESTRICTED` < `CONFIDENTIAL`) |
 | Histórico | Valores de colunas ocultas e eventos de documentos acima do nível são ocultados (`redacted: true`) |
+| `allowedActivityTypes` | Keys dos [tipos de registro](#tipos-de-registro-da-linha-do-tempo) que o usuário pode registrar na categoria. **Ausente (`null`), todos são permitidos.** Registrar um tipo fora da lista: 403. As keys precisam existir na categoria (senão, 400). |
 
 ### Categoria nativa de clientes
 
@@ -229,7 +238,7 @@ Os registros de `clients` pertencem à categoria cujo `tableReference` é `"clie
 ### Regras de proteção
 
 - O administrador não pode remover o próprio acesso de administrador, se desativar nem excluir o próprio usuário (422).
-- Atendimentos manuais na linha do tempo exigem permissão de **edição** no registro.
+- Atendimentos manuais na linha do tempo exigem permissão de **edição** no registro e que o tipo esteja liberado em `allowedActivityTypes`.
 
 ---
 
@@ -275,11 +284,17 @@ Convenções:
       "entityType": "native", "tableReference": "clients",
       "canRead": true, "canCreate": false, "canUpdate": true, "canDelete": false,
       "allowedColumns": { "read": ["nome", "telefone"], "write": ["telefone"] },
-      "maxConfidentiality": "INTERNAL"
+      "maxConfidentiality": "INTERNAL",
+      "activityTypes": [
+        { "id": "…", "key": "triagem", "label": "Triagem", "color": "#5b2a86" },
+        { "id": "…", "key": "visita_domiciliar", "label": "Visita domiciliar", "color": "#15803d" }
+      ]
     }
   ]
 }
 ```
+
+`activityTypes` lista os tipos ativos que o usuário **pode registrar** naquela categoria: já considera `allowedActivityTypes` e vem vazio quando ele não tem `canUpdate`. O front usa essa lista no seletor de tipo ao registrar um atendimento.
 
 **`PUT /auth/me/password`**: `{ "currentPassword": "…", "newPassword": "…" }` (mínimo de 6 caracteres). Responde 204; senha atual errada dá 422.
 
@@ -314,7 +329,7 @@ E-mail duplicado dá **409**.
 | `GET` | `/categories/{id}` | autenticado | Busca categoria |
 | `POST` | `/categories` | admin | Cria categoria |
 | `PUT` | `/categories/{id}` | admin | Atualiza categoria |
-| `DELETE` | `/categories/{id}` | admin | Exclui categoria (409 se ainda houver entidades dinâmicas) |
+| `DELETE` | `/categories/{id}` | admin | Exclui categoria (409 se ainda houver entidades dinâmicas ou se seus tipos já foram usados na linha do tempo) |
 
 ```json
 // POST/PUT /categories
@@ -325,6 +340,7 @@ E-mail duplicado dá **409**.
   "isActive": true                // categorias inativas não recebem novos registros
 }
 ```
+Toda categoria nova já nasce com os quatro [tipos de registro](#tipos-de-registro-da-linha-do-tempo) padrão: Triagem, Atendimento, Acompanhamento e Anotação.
 
 ### Campos personalizados (de categorias dinâmicas)
 
@@ -376,6 +392,41 @@ São os campos do "formulário" de uma categoria dinâmica. A `key` é o nome us
 - **Opções de LIST:** remover uma opção que **ainda é usada** por algum registro dá 409, e a mensagem lista as opções em uso. Adicionar opções e remover opções sem uso é permitido.
 - **Exclusão:** excluir um campo com dados dá 409. Com `?purgeData=true`, o campo é removido e o valor é apagado de todos os registros.
 
+### Tipos de registro da linha do tempo
+
+Cada categoria (nativa ou dinâmica) tem os seus tipos de registro manual. Exemplos: em "Mulheres atendidas", *Triagem, Atendimento psicológico, Atendimento jurídico, Visita domiciliar*; em "Cursos", *Matrícula, Presença, Certificado*.
+
+| Método | Rota | Acesso | Descrição |
+|---|---|---|---|
+| `GET` | `/categories/{categoryId}/activity-types?includeInactive=false` | permissão de leitura | Lista os tipos ativos, ordenados por `position`. Só admin pode pedir `includeInactive=true` (senão, 403). |
+| `POST` | `/categories/{categoryId}/activity-types` | admin | Cria tipo |
+| `PUT` | `/categories/{categoryId}/activity-types/{typeId}` | admin | Atualiza tipo (renomear, recolorir, reordenar, desativar) |
+| `DELETE` | `/categories/{categoryId}/activity-types/{typeId}` | admin | Exclui tipo |
+
+```json
+// POST/PUT
+{
+  "key": "atendimento_psicologico",   // minúsculas, números e "_", começando por letra; não pode mudar depois
+  "label": "Atendimento psicológico",
+  "description": "Sessão com a psicóloga",   // opcional
+  "color": "#0e7490",                        // opcional; hexadecimal (#rgb, #rrggbb ou #rrggbbaa)
+  "position": 2,                             // ordem de exibição; padrão 0
+  "isActive": true                           // padrão true
+}
+// resposta
+{
+  "id": "…", "categoryId": "…", "key": "atendimento_psicologico", "label": "Atendimento psicológico",
+  "description": "Sessão com a psicóloga", "color": "#0e7490", "position": 2, "isActive": true, "createdAt": "…"
+}
+```
+
+**Regras:**
+
+- **Chave:** `key` repetida na categoria dá **409**; tentar alterar a `key` dá **422**.
+- **Renomear:** mudar o `label` **não altera o histórico**, porque cada registro guarda o nome do tipo no momento em que foi feito. Já a `color` exibida na linha do tempo é sempre a atual.
+- **Excluir:** um tipo **já usado** na linha do tempo não pode ser excluído (**409**); desative-o com `isActive: false`. Tipos inativos não aparecem no `GET` padrão nem podem ser usados em novos registros, mas continuam no histórico. Ao excluir um tipo sem uso, a key dele sai também das permissões que o listavam.
+- **Tipos padrão:** toda categoria nova nasce com `triagem`, `atendimento`, `acompanhamento` e `anotacao`, que podem ser renomeados, desativados ou excluídos como os demais.
+
 ### Permissões
 
 | Método | Rota | Acesso | Descrição |
@@ -387,6 +438,16 @@ São os campos do "formulário" de uma categoria dinâmica. A `key` é o nome us
 | `DELETE` | `/permissions/{id}` | admin | Remove permissão |
 
 O corpo está descrito em [Controle de acesso](#permissão-por-categoria). `maxConfidentiality`, se omitido, vale `INTERNAL`. Cada usuário tem **uma** permissão por categoria; uma segunda para o mesmo par usuário/categoria dá **409**, então use o `PUT` para alterar.
+
+**`allowedActivityTypes` no `PUT`:** segue a convenção dos outros campos.
+
+| Valor enviado | Efeito |
+|---|---|
+| ausente ou `null` | mantém o valor atual |
+| `[]` | remove a restrição: todos os tipos ficam liberados, inclusive os criados depois |
+| lista de keys | passa a valer só essa lista |
+
+Na criação (`POST`), ausente ou `[]` significa todos os tipos.
 
 ### Clientes
 
@@ -510,18 +571,43 @@ Rotas compartilhadas por clientes e entidades dinâmicas: `{tipo}` é `clients` 
 **Atendimento manual**
 ```json
 {
-  "actionType": "SERVICE",              // TRIAGE | SERVICE | FOLLOW_UP | NOTE
+  "activityTypeId": "…",                    // um dos tipos ativos da categoria do registro
   "description": "Atendimento psicológico inicial",
   "responsibleEmployee": "Fernanda Lima",   // opcional
   "occurredAt": "2026-11-17T10:00:00"       // opcional, não pode ser no futuro; padrão: agora
 }
 ```
 
-**Tipos de atividade**
-
-| Manuais | Automáticas (auditoria; não podem ser criadas pela API, que responde 422) |
+| Situação | Resposta |
 |---|---|
-| `TRIAGE`, `SERVICE`, `FOLLOW_UP`, `NOTE` | `CREATED`, `UPDATED`, `DELETED`, `FILE_UPLOADED`, `FILE_UPDATED`, `FILE_REMOVED`, `FILE_DOWNLOADED` |
+| Tipo não pertence à categoria do registro, não existe ou está inativo | **422** |
+| Cliente sem categoria nativa `clients` (não há tipos) | **422** |
+| Tipo fora do `allowedActivityTypes` do usuário, ou sem `canUpdate` | **403** |
+| Nenhum tipo informado, ou `activityTypeId` e `actionType` juntos | **400** |
+
+> **Compatibilidade:** o formato antigo, `"actionType": "TRIAGE" | "SERVICE" | "FOLLOW_UP" | "NOTE"` sem `activityTypeId`, ainda é aceito e equivale ao tipo padrão correspondente da categoria (`triagem`, `atendimento`, `acompanhamento`, `anotacao`). Se a categoria não tiver esse tipo, a resposta é 422. Prefira `activityTypeId`.
+
+**Resposta das atividades** (em `/activities`, `/overview` e `/users/{id}/activities`):
+```json
+{
+  "id": "…", "entityType": "clients", "entityId": "…", "userId": "…", "userName": "Fernanda Lima",
+  "actionType": "MANUAL",
+  "activityType": { "id": "…", "key": "atendimento_psicologico", "label": "Atendimento psicológico", "color": "#0e7490" },
+  "description": "…", "changes": null, "responsibleEmployee": "Fernanda Lima",
+  "occurredAt": "…", "createdAt": "…", "redacted": false
+}
+```
+
+- **`activityType.label`:** é o nome gravado **no momento do registro**. A `color` é a atual do tipo.
+- **Eventos automáticos:** vêm com `activityType: null`.
+
+**`actionType`**
+
+| Valor | Quando |
+|---|---|
+| `MANUAL` | Registro manual. O tipo de fato está em `activityType` |
+| `CREATED`, `UPDATED`, `DELETED`, `FILE_UPLOADED`, `FILE_UPDATED`, `FILE_REMOVED`, `FILE_DOWNLOADED` | Eventos automáticos de auditoria; não podem ser criados pela API (422) |
+| `TRIAGE`, `SERVICE`, `FOLLOW_UP`, `NOTE` | Registros antigos que não puderam ser migrados (ex.: de um registro já excluído). Só aparecem no histórico, com `activityType: null` |
 
 Cada atividade traz `changes` (em `UPDATED`: `{"campo": {"antigo": …, "novo": …}}`) e `redacted: true` quando parte do conteúdo foi ocultada para o usuário.
 
@@ -567,11 +653,11 @@ Todos os erros seguem o formato **Problem Details** (RFC 9457):
 |---|---|
 | **400** | JSON malformado, validação de campos (`errors` por campo), valores de campos dinâmicos ou filtros inválidos, enum desconhecido (a mensagem lista os valores válidos) |
 | **401** | Sem token, token inválido ou expirado, login inválido |
-| **403** | Autenticado, mas sem permissão (rota de admin, categoria, coluna ou nível de sigilo) |
+| **403** | Autenticado, mas sem permissão (rota de admin, categoria, coluna, nível de sigilo ou tipo de registro não liberado) |
 | **404** | Recurso não encontrado |
-| **409** | Conflito: e-mail ou chave duplicados, categoria com registros, campo com dados, opção em uso |
+| **409** | Conflito: e-mail ou chave duplicados, categoria com registros ou com histórico manual, campo com dados, opção em uso, tipo de registro já usado |
 | **413** | Arquivo acima de 20 MB |
-| **422** | Regra de negócio: categoria não dinâmica ou inativa, tipo de atividade automático, senha atual incorreta, chave de campo alterada, administrador tentando se bloquear |
+| **422** | Regra de negócio: categoria não dinâmica ou inativa, tipo de registro inválido ou inativo para o registro, tipo de atividade automático, senha atual incorreta, chave de campo ou de tipo alterada, administrador tentando se bloquear |
 
 ---
 
@@ -594,6 +680,10 @@ Com o profile `seed`, a aplicação cria dados fictícios para apresentação e 
   | `cursos@secmulher.demo` | Instrutora de cursos (só vê contato das atendidas) |
 
 - **Atendidas:** mulheres com histórico completo (chegada, triagem, atendimentos, cursos) e PDFs simulando documentos.
+- **Tipos de registro:**
+  - **"Mulheres Atendidas":** os quatro padrão + *Atendimento psicológico*, *Atendimento jurídico*, *Visita domiciliar* e *Atividade de curso*, cada um com cor.
+  - **"Inscrições em Cursos":** os padrão + *Matrícula*, *Presença* e *Certificado*.
+  - **Restrição por perfil:** só a psicóloga registra *Atendimento psicológico*; a assistente social pode registrar todos os outros.
 - **Execução:** o seed não roda de novo se já tiver sido aplicado.
 
 ---
@@ -603,10 +693,12 @@ Com o profile `seed`, a aplicação cria dados fictícios para apresentação e 
 1. **Login como administrador**: `POST /auth/login`.
 2. **Criar a categoria de clientes**: `POST /categories` com `{"name": "Mulheres atendidas", "entityType": "native", "tableReference": "clients"}`.
 3. **Criar categorias dinâmicas** e seus campos: `POST /categories` com `entityType: "dynamic"` e depois `POST /categories/{id}/fields` para cada campo.
-4. **Cadastrar as funcionárias**: `POST /users`.
-5. **Dar permissões**: `POST /permissions` para cada funcionária e categoria, definindo colunas e nível de sigilo.
-6. **No front**, após o login de cada funcionária:
-   - `GET /auth/me` para montar menus e telas conforme o acesso;
+4. **Configurar os tipos de registro** de cada categoria: ajustar os quatro padrão e criar os específicos com `POST /categories/{id}/activity-types` (ex.: *Atendimento psicológico*, *Matrícula*).
+5. **Cadastrar as funcionárias**: `POST /users`.
+6. **Dar permissões**: `POST /permissions` para cada funcionária e categoria, definindo colunas, nível de sigilo e, se for o caso, os tipos de registro liberados (`allowedActivityTypes`).
+7. **No front**, após o login de cada funcionária:
+   - `GET /auth/me` para montar menus e telas conforme o acesso, incluindo os tipos que ela pode registrar (`activityTypes`);
    - `GET /categories/{id}/fields` para montar formulários e filtros dinâmicos (`fieldType`, `options`, `filterOperators`);
    - `GET /clients` / `POST /dynamic-entities/search` para as listagens com filtros;
-   - `GET /{tipo}/{id}/overview` para a ficha completa do registro.
+   - `GET /{tipo}/{id}/overview` para a ficha completa do registro;
+   - `POST /{tipo}/{id}/activities` com `activityTypeId` para registrar um atendimento.

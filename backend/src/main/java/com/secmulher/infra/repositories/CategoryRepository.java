@@ -10,5 +10,5 @@ import com.secmulher.infra.entities.Category;
 public interface CategoryRepository extends JpaRepository<Category, UUID> {
     boolean existsByName(String name);
 
-    Optional<Category> findFirstByTableReference(String tableReference);
+    Optional<Category> findFirstByTableReferenceOrderByCreatedAtAsc(String tableReference);
 }

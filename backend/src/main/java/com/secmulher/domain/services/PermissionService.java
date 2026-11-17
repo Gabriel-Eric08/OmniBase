@@ -2,6 +2,7 @@ package com.secmulher.domain.services;
 
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -12,6 +13,7 @@ import com.secmulher.domain.access.AccessControlService;
 import com.secmulher.domain.dtos.PermissionDtos.PermissionRequest;
 import com.secmulher.domain.dtos.PermissionDtos.PermissionResponse;
 import com.secmulher.domain.exceptions.ConflictException;
+import com.secmulher.domain.exceptions.FieldValidationException;
 import com.secmulher.domain.exceptions.NotFoundException;
 import com.secmulher.infra.entities.Permission;
 import com.secmulher.infra.entities.enums.ConfidentialityLevel;
@@ -24,18 +26,36 @@ public class PermissionService {
     final UserService userService;
     final CategoryService categoryService;
     final AccessControlService accessControl;
+    final ActivityTypeService activityTypeService;
 
     public PermissionService(PermissionRepository permissionRepository, UserService userService,
-            CategoryService categoryService, AccessControlService accessControl) {
+            CategoryService categoryService, AccessControlService accessControl,
+            ActivityTypeService activityTypeService) {
         this.permissionRepository = permissionRepository;
         this.userService = userService;
         this.categoryService = categoryService;
         this.accessControl = accessControl;
+        this.activityTypeService = activityTypeService;
     }
 
     private Permission getPermissionById(UUID id) {
         return permissionRepository.findById(id)
             .orElseThrow(() -> new NotFoundException("Permissão não encontrada: " + id));
+    }
+
+    // [] (ou null na criação) = sem restrição, guardado como null; as keys precisam existir na categoria
+    private List<String> normalizeActivityTypes(UUID categoryId, List<String> keys) {
+        if (keys == null || keys.isEmpty()) {
+            return null;
+        }
+        List<String> distinct = keys.stream().distinct().toList();
+        List<String> existing = activityTypeService.getKeys(categoryId);
+        List<String> unknown = distinct.stream().filter(key -> !existing.contains(key)).toList();
+        if (!unknown.isEmpty()) {
+            throw new FieldValidationException("Dados inválidos", Map.of("allowedActivityTypes",
+                "tipos de registro inexistentes nesta categoria: " + String.join(", ", unknown)));
+        }
+        return distinct;
     }
 
     @Transactional(readOnly = true)
@@ -69,6 +89,7 @@ public class PermissionService {
             .canDelete(Objects.requireNonNullElse(request.canDelete(), false))
             .allowedColumns(Objects.requireNonNullElse(request.allowedColumns(), new HashMap<>()))
             .maxConfidentiality(Objects.requireNonNullElse(request.maxConfidentiality(), ConfidentialityLevel.INTERNAL))
+            .allowedActivityTypes(normalizeActivityTypes(request.categoryId(), request.allowedActivityTypes()))
             .build();
 
         return PermissionResponse.from(permissionRepository.saveAndFlush(permission));
@@ -106,6 +127,13 @@ public class PermissionService {
         }
         if (request.maxConfidentiality() != null) {
             permission.setMaxConfidentiality(request.maxConfidentiality());
+        }
+        // null mantém; [] remove a restrição. Mudando de categoria, as keys antigas são revalidadas na nova.
+        if (request.allowedActivityTypes() != null) {
+            permission.setAllowedActivityTypes(normalizeActivityTypes(request.categoryId(), request.allowedActivityTypes()));
+        } else if (targetChanged && permission.getAllowedActivityTypes() != null) {
+            permission.setAllowedActivityTypes(
+                normalizeActivityTypes(request.categoryId(), permission.getAllowedActivityTypes()));
         }
 
         return PermissionResponse.from(permissionRepository.saveAndFlush(permission));

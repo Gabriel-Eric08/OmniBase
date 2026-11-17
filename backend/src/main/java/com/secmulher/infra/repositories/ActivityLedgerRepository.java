@@ -11,4 +11,8 @@ public interface ActivityLedgerRepository extends JpaRepository<ActivityLedger, 
     List<ActivityLedger> findByEntityTypeAndEntityIdOrderByOccurredAtDescCreatedAtDesc(String entityType, UUID entityId);
 
     List<ActivityLedger> findByUserIdOrderByCreatedAtDesc(UUID userId);
+
+    boolean existsByActivityTypeId(UUID activityTypeId);
+
+    boolean existsByActivityType_Category_Id(UUID categoryId);
 }

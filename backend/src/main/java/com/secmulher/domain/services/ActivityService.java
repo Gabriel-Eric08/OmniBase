@@ -17,8 +17,12 @@ import com.secmulher.domain.dtos.ActivityDtos.ActivityResponse;
 import com.secmulher.domain.dtos.ActivityDtos.ManualActivityRequest;
 import com.secmulher.domain.enums.RecordType;
 import com.secmulher.domain.exceptions.BusinessException;
+import com.secmulher.domain.exceptions.FieldValidationException;
+import com.secmulher.domain.exceptions.ForbiddenException;
 import com.secmulher.domain.exceptions.NotFoundException;
 import com.secmulher.infra.entities.ActivityLedger;
+import com.secmulher.infra.entities.CategoryActivityType;
+import com.secmulher.infra.repositories.CategoryActivityTypeRepository;
 import com.secmulher.infra.entities.enums.ActivityType;
 import com.secmulher.infra.entities.enums.ConfidentialityLevel;
 import com.secmulher.infra.repositories.ActivityLedgerRepository;
@@ -37,9 +41,12 @@ public class ActivityService {
     final RecordService recordService;
     final CurrentUserProvider currentUserProvider;
     final AccessControlService accessControl;
+    final CategoryActivityTypeRepository activityTypeRepository;
 
     public ActivityService(ActivityLedgerRepository activityLedgerRepository, UserRepository userRepository,
-            RecordService recordService, CurrentUserProvider currentUserProvider, AccessControlService accessControl) {
+            RecordService recordService, CurrentUserProvider currentUserProvider, AccessControlService accessControl,
+            CategoryActivityTypeRepository activityTypeRepository) {
+        this.activityTypeRepository = activityTypeRepository;
         this.activityLedgerRepository = activityLedgerRepository;
         this.userRepository = userRepository;
         this.recordService = recordService;
@@ -80,26 +87,66 @@ public class ActivityService {
             .stream().map(ActivityResponse::from).toList();
     }
 
-    // Registrar atendimento faz parte de editar o acompanhamento do registro
+    // Registrar atendimento faz parte de editar o acompanhamento do registro. O tipo precisa ser um dos
+    // tipos ativos da categoria do registro e estar liberado na permissão do usuário.
     @Transactional
     public ActivityResponse createManual(RecordType type, UUID recordId, ManualActivityRequest request) {
-        if (!request.actionType().isManual()) {
-            throw new BusinessException("O tipo " + request.actionType() + " é reservado para registros automáticos do sistema");
+        if (request.activityTypeId() == null && request.actionType() == null) {
+            throw new FieldValidationException("Dados inválidos",
+                Map.of("activityTypeId", "informe o tipo de registro (activityTypeId)"));
+        }
+        if (request.activityTypeId() != null && request.actionType() != null) {
+            throw new FieldValidationException("Dados inválidos",
+                Map.of("actionType", "envie apenas activityTypeId; actionType é o formato antigo"));
+        }
+        if (request.actionType() != null && request.actionType().legacyDefaultKey() == null) {
+            throw new BusinessException("O tipo " + request.actionType() + " não pode ser usado em registros manuais; "
+                + "use activityTypeId");
         }
         recordService.ensureExists(type, recordId);
-        accessControl.forRecord(type, recordId).requireUpdate();
+        CategoryAccess access = accessControl.forRecord(type, recordId).requireUpdate();
+
+        CategoryActivityType activityType = resolveActivityType(type, recordId, request);
+        if (!access.canRegisterActivityType(activityType.getKey())) {
+            throw new ForbiddenException("Sem permissão para registrar '" + activityType.getLabel() + "' nesta categoria");
+        }
 
         ActivityLedger activity = ActivityLedger.builder()
             .entityType(type.getTableName())
             .entityId(recordId)
             .user(currentUserProvider.getCurrentUser().orElse(null))
-            .actionType(request.actionType())
+            .actionType(ActivityType.MANUAL)
+            .activityType(activityType)
+            .activityTypeLabel(activityType.getLabel())
             .description(request.description())
             .responsibleEmployee(request.responsibleEmployee())
             .occurredAt(Objects.requireNonNullElseGet(request.occurredAt(), LocalDateTime::now))
             .build();
 
         return ActivityResponse.from(activityLedgerRepository.saveAndFlush(activity));
+    }
+
+    private CategoryActivityType resolveActivityType(RecordType type, UUID recordId, ManualActivityRequest request) {
+        UUID categoryId = accessControl.categoryIdForRecord(type, recordId);
+        if (categoryId == null) {
+            throw new BusinessException("O registro não pertence a nenhuma categoria, então não há tipos de registro. "
+                + "Crie a categoria nativa com tableReference '" + type.getTableName() + "'");
+        }
+
+        CategoryActivityType activityType = request.activityTypeId() != null
+            ? activityTypeRepository.findById(request.activityTypeId())
+                .filter(found -> found.getCategory().getId().equals(categoryId))
+                .orElseThrow(() -> new BusinessException("Tipo de registro não pertence à categoria deste registro: "
+                    + request.activityTypeId()))
+            : activityTypeRepository.findByCategoryIdAndKey(categoryId, request.actionType().legacyDefaultKey())
+                .orElseThrow(() -> new BusinessException("A categoria deste registro não tem o tipo padrão '"
+                    + request.actionType().legacyDefaultKey() + "' equivalente a " + request.actionType()
+                    + "; use activityTypeId"));
+
+        if (!Boolean.TRUE.equals(activityType.getIsActive())) {
+            throw new BusinessException("O tipo de registro '" + activityType.getLabel() + "' está desativado");
+        }
+        return activityType;
     }
 
     // Registro automático de auditoria; participa da transação de quem chamou

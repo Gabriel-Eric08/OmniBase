@@ -71,7 +71,7 @@ public class AccessControlService {
     // Registros de tabelas nativas pertencem à categoria cuja table_reference aponta para a tabela
     @Transactional(readOnly = true)
     public CategoryAccess forNativeTable(String tableName) {
-        UUID categoryId = categoryRepository.findFirstByTableReference(tableName).map(Category::getId).orElse(null);
+        UUID categoryId = categoryRepository.findFirstByTableReferenceOrderByCreatedAtAsc(tableName).map(Category::getId).orElse(null);
         if (isAdmin()) {
             return CategoryAccess.full(categoryId);
         }
@@ -84,6 +84,18 @@ public class AccessControlService {
             case CLIENT -> forNativeTable(type.getTableName());
             case DYNAMIC_ENTITY -> dynamicEntityRepository.findById(recordId)
                 .map(entity -> forCategory(entity.getCategory().getId()))
+                .orElseThrow(() -> new NotFoundException("Registro não encontrado: " + type.getPath() + "/" + recordId));
+        };
+    }
+
+    // Categoria a que o registro pertence; null para clientes quando não há categoria nativa 'clients'
+    @Transactional(readOnly = true)
+    public UUID categoryIdForRecord(RecordType type, UUID recordId) {
+        return switch (type) {
+            case CLIENT -> categoryRepository.findFirstByTableReferenceOrderByCreatedAtAsc(type.getTableName())
+                .map(Category::getId).orElse(null);
+            case DYNAMIC_ENTITY -> dynamicEntityRepository.findById(recordId)
+                .map(entity -> entity.getCategory().getId())
                 .orElseThrow(() -> new NotFoundException("Registro não encontrado: " + type.getPath() + "/" + recordId));
         };
     }

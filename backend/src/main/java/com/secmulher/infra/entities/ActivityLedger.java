@@ -60,6 +60,15 @@ public class ActivityLedger {
     @Column(name = "action_type", nullable = false, length = 50, updatable = false)
     private ActivityType actionType;
 
+    // Tipo configurável do registro manual (action_type = MANUAL); nulo em eventos automáticos
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "activity_type_id", updatable = false)
+    private CategoryActivityType activityType;
+
+    // Nome do tipo no momento do registro: renomear o tipo depois não altera o histórico
+    @Column(name = "activity_type_label", updatable = false)
+    private String activityTypeLabel;
+
     @Column(name = "description", columnDefinition = "text", updatable = false)
     private String description;
 

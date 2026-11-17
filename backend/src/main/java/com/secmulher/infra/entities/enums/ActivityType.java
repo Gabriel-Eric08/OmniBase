@@ -1,13 +1,19 @@
 package com.secmulher.infra.entities.enums;
 
 public enum ActivityType {
-    // Registradas manualmente pelos operadores
-    TRIAGE(true),
-    SERVICE(true),
-    FOLLOW_UP(true),
-    NOTE(true),
+    // Registro manual: o tipo de fato (ex: 'Atendimento psicológico') vem de activity_types,
+    // configurado por categoria
+    MANUAL(true),
 
-    // Geradas automaticamente pelo sistema (auditoria)
+    // Tipos manuais antigos (enum fixo). Registros migrados viram MANUAL; os que não puderam ser
+    // migrados (ex: registro já excluído) continuam legíveis. Na API, ainda aceitos como atalho para
+    // o tipo padrão correspondente da categoria (triagem, atendimento, acompanhamento, anotacao).
+    @Deprecated TRIAGE(true),
+    @Deprecated SERVICE(true),
+    @Deprecated FOLLOW_UP(true),
+    @Deprecated NOTE(true),
+
+    // Gerados automaticamente pelo sistema (auditoria)
     CREATED(false),
     UPDATED(false),
     DELETED(false),
@@ -24,5 +30,16 @@ public enum ActivityType {
 
     public boolean isManual() {
         return manual;
+    }
+
+    // Key do tipo padrão equivalente a um valor antigo do enum; null se não houver
+    public String legacyDefaultKey() {
+        return switch (this) {
+            case TRIAGE -> "triagem";
+            case SERVICE -> "atendimento";
+            case FOLLOW_UP -> "acompanhamento";
+            case NOTE -> "anotacao";
+            default -> null;
+        };
     }
 }

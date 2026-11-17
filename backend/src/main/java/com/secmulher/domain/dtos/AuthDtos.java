@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.secmulher.domain.dtos.ActivityTypeDtos.ActivityTypeSummary;
 import com.secmulher.domain.dtos.UserDtos.UserResponse;
 import com.secmulher.infra.entities.enums.ConfidentialityLevel;
 
@@ -42,7 +43,8 @@ public final class AuthDtos {
         boolean canUpdate,
         boolean canDelete,
         Map<String, Object> allowedColumns,
-        ConfidentialityLevel maxConfidentiality
+        ConfidentialityLevel maxConfidentiality,
+        List<ActivityTypeSummary> activityTypes  // tipos de registro manual que o usuário pode registrar
     ) {}
 
     public record MeResponse(

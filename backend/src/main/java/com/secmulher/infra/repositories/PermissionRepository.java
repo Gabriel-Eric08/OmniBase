@@ -11,6 +11,8 @@ import com.secmulher.infra.entities.Permission;
 public interface PermissionRepository extends JpaRepository<Permission, UUID> {
     List<Permission> findByUserId(UUID userId);
 
+    List<Permission> findByCategoryId(UUID categoryId);
+
     Optional<Permission> findByUserIdAndCategoryId(UUID userId, UUID categoryId);
 
     boolean existsByUserIdAndCategoryId(UUID userId, UUID categoryId);

@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.secmulher.domain.access.AccessControlService;
+import com.secmulher.domain.access.CategoryAccess;
+import com.secmulher.domain.dtos.ActivityTypeDtos.ActivityTypeSummary;
 import com.secmulher.domain.dtos.AuthDtos.CategoryAccessResponse;
 import com.secmulher.domain.dtos.AuthDtos.ChangePasswordRequest;
 import com.secmulher.domain.dtos.AuthDtos.LoginRequest;
@@ -34,12 +36,14 @@ public class AuthService {
     final PasswordEncoder passwordEncoder;
     final TokenService tokenService;
     final AccessControlService accessControl;
+    final ActivityTypeService activityTypeService;
     // Hash usado quando o e-mail não existe, para o tempo de resposta não revelar quais e-mails estão cadastrados
     final String dummyHash;
 
     public AuthService(UserRepository userRepository, PermissionRepository permissionRepository,
             CategoryRepository categoryRepository, PasswordEncoder passwordEncoder, TokenService tokenService,
-            AccessControlService accessControl) {
+            AccessControlService accessControl, ActivityTypeService activityTypeService) {
+        this.activityTypeService = activityTypeService;
         this.userRepository = userRepository;
         this.permissionRepository = permissionRepository;
         this.categoryRepository = categoryRepository;
@@ -72,7 +76,8 @@ public class AuthService {
             ? categoryRepository.findAll().stream()
                 .map(category -> new CategoryAccessResponse(category.getId(), category.getName(),
                     category.getEntityType(), category.getTableReference(), true, true, true, true,
-                    Map.of(), ConfidentialityLevel.CONFIDENTIAL))
+                    Map.of(), ConfidentialityLevel.CONFIDENTIAL,
+                    registrableTypes(CategoryAccess.full(category.getId()))))
                 .toList()
             : permissionRepository.findByUserId(user.getId()).stream()
                 .map(permission -> new CategoryAccessResponse(permission.getCategory().getId(),
@@ -81,10 +86,22 @@ public class AuthService {
                     Boolean.TRUE.equals(permission.getCanRead()), Boolean.TRUE.equals(permission.getCanCreate()),
                     Boolean.TRUE.equals(permission.getCanUpdate()), Boolean.TRUE.equals(permission.getCanDelete()),
                     permission.getAllowedColumns() != null ? permission.getAllowedColumns() : Map.of(),
-                    permission.getMaxConfidentiality()))
+                    permission.getMaxConfidentiality(),
+                    registrableTypes(CategoryAccess.from(permission))))
                 .toList();
 
         return new MeResponse(UserResponse.from(user), access);
+    }
+
+    // Tipos ativos da categoria que o usuário pode registrar (exige permissão de edição)
+    private List<ActivityTypeSummary> registrableTypes(CategoryAccess access) {
+        if (!access.canUpdate()) {
+            return List.of();
+        }
+        return activityTypeService.getActiveTypes(access.categoryId()).stream()
+            .filter(type -> access.canRegisterActivityType(type.getKey()))
+            .map(ActivityTypeSummary::from)
+            .toList();
     }
 
     @Transactional

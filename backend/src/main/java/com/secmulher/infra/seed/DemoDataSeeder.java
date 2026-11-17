@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +27,7 @@ import com.secmulher.domain.enums.RecordType;
 import com.secmulher.domain.services.ActivityService;
 import com.secmulher.infra.entities.ActivityLedger;
 import com.secmulher.infra.entities.Category;
+import com.secmulher.infra.entities.CategoryActivityType;
 import com.secmulher.infra.entities.CategoryField;
 import com.secmulher.infra.entities.Client;
 import com.secmulher.infra.entities.DynamicEntity;
@@ -36,6 +38,7 @@ import com.secmulher.infra.entities.enums.ActivityType;
 import com.secmulher.infra.entities.enums.ConfidentialityLevel;
 import com.secmulher.infra.entities.enums.FieldType;
 import com.secmulher.infra.repositories.ActivityLedgerRepository;
+import com.secmulher.infra.repositories.CategoryActivityTypeRepository;
 import com.secmulher.infra.repositories.CategoryFieldRepository;
 import com.secmulher.infra.repositories.CategoryRepository;
 import com.secmulher.infra.repositories.ClientRepository;
@@ -152,6 +155,28 @@ public class DemoDataSeeder implements ApplicationRunner {
         )
     );
 
+    // Tipos de registro manual de cada categoria (os quatro padrão + os específicos do serviço)
+    record SeedType(String key, String label, String color) {}
+
+    private static final List<SeedType> CLIENT_ACTIVITY_TYPES = List.of(
+        new SeedType("triagem", "Triagem", "#5b2a86"),
+        new SeedType("atendimento", "Atendimento", "#2563eb"),
+        new SeedType("acompanhamento", "Acompanhamento", "#0f766e"),
+        new SeedType("anotacao", "Anotação", "#64748b"),
+        new SeedType("atendimento_psicologico", "Atendimento psicológico", "#0e7490"),
+        new SeedType("atendimento_juridico", "Atendimento jurídico", "#b45309"),
+        new SeedType("visita_domiciliar", "Visita domiciliar", "#15803d"),
+        new SeedType("atividade_curso", "Atividade de curso", "#7c3aed"));
+
+    private static final List<SeedType> COURSE_ACTIVITY_TYPES = List.of(
+        new SeedType("triagem", "Triagem", "#5b2a86"),
+        new SeedType("atendimento", "Atendimento", "#2563eb"),
+        new SeedType("acompanhamento", "Acompanhamento", "#0f766e"),
+        new SeedType("anotacao", "Anotação", "#64748b"),
+        new SeedType("matricula", "Matrícula", "#7c3aed"),
+        new SeedType("presenca", "Presença", "#0891b2"),
+        new SeedType("certificado", "Certificado", "#ca8a04"));
+
     private static final List<Woman> WOMEN = List.of(
         new Woman("Ana Paula Ferreira", LocalDate.of(1988, 3, 14), "(81) 98712-4433", 230, COURSES.get(0)),
         new Woman("Maria José da Silva", LocalDate.of(1975, 7, 2), "(81) 99654-2210", 215, COURSES.get(1)),
@@ -177,6 +202,7 @@ public class DemoDataSeeder implements ApplicationRunner {
     final DynamicEntityRepository dynamicEntityRepository;
     final ActivityLedgerRepository activityLedgerRepository;
     final FileRecordRepository fileRecordRepository;
+    final CategoryActivityTypeRepository activityTypeRepository;
     final FileStorage fileStorage;
     final PasswordEncoder passwordEncoder;
     final String seedPassword;
@@ -185,13 +211,16 @@ public class DemoDataSeeder implements ApplicationRunner {
     private final byte[] blankPdf = blankPdf();
     private int activityCount;
     private int fileCount;
+    private final Map<String, CategoryActivityType> clientTypes = new HashMap<>();
 
     public DemoDataSeeder(UserRepository userRepository, CategoryRepository categoryRepository,
             CategoryFieldRepository categoryFieldRepository, PermissionRepository permissionRepository,
             ClientRepository clientRepository, DynamicEntityRepository dynamicEntityRepository,
             ActivityLedgerRepository activityLedgerRepository, FileRecordRepository fileRecordRepository,
             FileStorage fileStorage, PasswordEncoder passwordEncoder,
+            CategoryActivityTypeRepository activityTypeRepository,
             @Value("${app.seed.password:Demo@2026}") String seedPassword) {
+        this.activityTypeRepository = activityTypeRepository;
         this.userRepository = userRepository;
         this.categoryRepository = categoryRepository;
         this.categoryFieldRepository = categoryFieldRepository;
@@ -218,6 +247,8 @@ public class DemoDataSeeder implements ApplicationRunner {
             .name(CLIENTS_CATEGORY).entityType("native").tableReference(RecordType.CLIENT.getTableName())
             .isActive(true).build());
         Category coursesCategory = createCoursesCategory();
+        clientTypes.putAll(createActivityTypes(clientsCategory, CLIENT_ACTIVITY_TYPES));
+        createActivityTypes(coursesCategory, COURSE_ACTIVITY_TYPES);
         createPermissions(staff, clientsCategory, coursesCategory);
 
         for (int i = 0; i < WOMEN.size(); i++) {
@@ -272,9 +303,14 @@ public class DemoDataSeeder implements ApplicationRunner {
 
     // Cada perfil enxerga só o necessário: a recepção não vê situação de risco nem laudos,
     // a instrutora só vê contato das atendidas, e apenas a psicóloga acessa documentos sigilosos
+    // e registra "Atendimento psicológico" (a assistente social pode registrar todos os outros tipos)
     private void createPermissions(Staff staff, Category clients, Category courses) {
         permission(staff.psychologist(), clients, true, true, true, false, Map.of(), ConfidentialityLevel.CONFIDENTIAL);
-        permission(staff.socialWorker(), clients, true, true, true, false, Map.of(), ConfidentialityLevel.RESTRICTED);
+        Permission social = permission(staff.socialWorker(), clients, true, true, true, false, Map.of(),
+            ConfidentialityLevel.RESTRICTED);
+        social.setAllowedActivityTypes(CLIENT_ACTIVITY_TYPES.stream()
+            .map(SeedType::key).filter(key -> !key.equals("atendimento_psicologico")).toList());
+        permissionRepository.save(social);
         permission(staff.receptionist(), clients, true, true, false, false,
             Map.of("read", List.of("nome", "telefone", "data_nascimento"),
                 "write", List.of("nome", "telefone", "data_nascimento")),
@@ -287,9 +323,9 @@ public class DemoDataSeeder implements ApplicationRunner {
         permission(staff.psychologist(), courses, true, false, false, false, Map.of(), ConfidentialityLevel.INTERNAL);
     }
 
-    private void permission(User user, Category category, boolean read, boolean create, boolean update,
+    private Permission permission(User user, Category category, boolean read, boolean create, boolean update,
             boolean delete, Map<String, Object> columns, ConfidentialityLevel level) {
-        permissionRepository.save(Permission.builder()
+        return permissionRepository.save(Permission.builder()
             .user(user).category(category).canRead(read).canCreate(create).canUpdate(update).canDelete(delete)
             .allowedColumns(new LinkedHashMap<>(columns)).maxConfidentiality(level).build());
     }
@@ -330,17 +366,16 @@ public class DemoDataSeeder implements ApplicationRunner {
                         null, author, when);
                 }
                 case ENROLL -> {
-                    ledger(RecordType.CLIENT, client.getId(), step.type(), description, null, responsible, author, when);
+                    manual(client.getId(), step, description, responsible, author, when);
                     enrollment = enroll(client, woman, coursesCategory, author, when);
                 }
                 case COMPLETE_COURSE -> {
-                    ledger(RecordType.CLIENT, client.getId(), step.type(), description, null, responsible, author, when);
+                    manual(client.getId(), step, description, responsible, author, when);
                     if (enrollment != null) {
                         completeCourse(enrollment, author, when);
                     }
                 }
-                case NONE -> ledger(RecordType.CLIENT, client.getId(), step.type(), description, null, responsible,
-                    author, when);
+                case NONE -> manual(client.getId(), step, description, responsible, author, when);
             }
 
             if (step.fileName() != null) {
@@ -393,6 +428,43 @@ public class DemoDataSeeder implements ApplicationRunner {
         details.put("sigilo", level.name());
         ledger(RecordType.CLIENT, clientId, ActivityType.FILE_UPLOADED, "Documento anexado: " + fileName, details,
             null, author, when);
+    }
+
+    private Map<String, CategoryActivityType> createActivityTypes(Category category, List<SeedType> types) {
+        Map<String, CategoryActivityType> byKey = new HashMap<>();
+        for (int i = 0; i < types.size(); i++) {
+            SeedType seed = types.get(i);
+            byKey.put(seed.key(), activityTypeRepository.save(CategoryActivityType.builder()
+                .category(category).key(seed.key()).label(seed.label()).color(seed.color())
+                .position(i).isActive(true).build()));
+        }
+        return byKey;
+    }
+
+    // Tipo configurável correspondente a cada passo das trajetórias
+    private static String activityTypeKey(Step step) {
+        return switch (step.type()) {
+            case TRIAGE -> "triagem";
+            case SERVICE -> switch (step.role()) {
+                case PSYCHOLOGY -> "atendimento_psicologico";
+                case LEGAL -> "atendimento_juridico";
+                case INSTRUCTOR -> "atividade_curso";
+                default -> "atendimento";
+            };
+            case FOLLOW_UP -> step.description().startsWith("Visita domiciliar") ? "visita_domiciliar" : "acompanhamento";
+            default -> "anotacao";
+        };
+    }
+
+    private void manual(UUID clientId, Step step, String description, String responsibleEmployee, User user,
+            LocalDateTime occurredAt) {
+        CategoryActivityType type = clientTypes.get(activityTypeKey(step));
+        activityLedgerRepository.save(ActivityLedger.builder()
+            .entityType(RecordType.CLIENT.getTableName()).entityId(clientId).user(user)
+            .actionType(ActivityType.MANUAL).activityType(type).activityTypeLabel(type.getLabel())
+            .description(description).responsibleEmployee(responsibleEmployee)
+            .occurredAt(occurredAt).build());
+        activityCount++;
     }
 
     private void ledger(RecordType type, UUID recordId, ActivityType actionType, String description,

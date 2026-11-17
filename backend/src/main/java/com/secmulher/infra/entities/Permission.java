@@ -1,6 +1,7 @@
 package com.secmulher.infra.entities;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -64,6 +65,11 @@ public class Permission {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "allowed_columns", columnDefinition = "jsonb")
     private Map<String, Object> allowedColumns;
+
+    // Keys dos tipos de registro manual que o usuário pode registrar; nulo = todos
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "allowed_activity_types", columnDefinition = "jsonb")
+    private List<String> allowedActivityTypes;
 
     // Nível máximo de sigilo de documento que o usuário acessa nesta categoria
     @Enumerated(EnumType.STRING)

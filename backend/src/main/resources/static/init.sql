@@ -134,6 +134,56 @@ CREATE TABLE IF NOT EXISTS activities_ledger (
 CREATE INDEX IF NOT EXISTS idx_ledger_polymorphic ON activities_ledger(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON activities_ledger(user_id);
 
+-- Tipos de registro manual configuráveis por categoria (ex: 'Atendimento psicológico', 'Matrícula')
+CREATE TABLE IF NOT EXISTS activity_types (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    category_id UUID NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    key VARCHAR(100) NOT NULL,               -- Identificador estável (^[a-z][a-z0-9_]*$), não muda depois de criado
+    label VARCHAR(255) NOT NULL,             -- Nome exibido
+    description TEXT,
+    color VARCHAR(20),                       -- Ex: '#5b2a86'
+    position INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(category_id, key)
+);
+
+-- Registros manuais apontam para o tipo e guardam o nome dele no momento do registro (auditoria imutável)
+ALTER TABLE activities_ledger
+    ADD COLUMN IF NOT EXISTS activity_type_id UUID REFERENCES activity_types(id) ON DELETE RESTRICT;
+ALTER TABLE activities_ledger ADD COLUMN IF NOT EXISTS activity_type_label VARCHAR(255);
+CREATE INDEX IF NOT EXISTS idx_ledger_activity_type ON activities_ledger(activity_type_id);
+
+-- Tipos que o usuário pode registrar na categoria (lista de keys); NULL = todos
+ALTER TABLE permissions ADD COLUMN IF NOT EXISTS allowed_activity_types JSONB;
+
+-- Migração (idempotente): os quatro tipos padrão em cada categoria que ainda não tem nenhum tipo
+INSERT INTO activity_types (category_id, key, label, position)
+SELECT c.id, d.key, d.label, d.position
+FROM categories c
+CROSS JOIN (VALUES ('triagem', 'Triagem', 0), ('atendimento', 'Atendimento', 1),
+                   ('acompanhamento', 'Acompanhamento', 2), ('anotacao', 'Anotação', 3)) AS d(key, label, position)
+WHERE NOT EXISTS (SELECT 1 FROM activity_types t WHERE t.category_id = c.id);
+
+-- Migração (idempotente): registros manuais antigos (enum fixo) passam a apontar para o tipo da categoria
+-- do registro. Os que não têm categoria identificável (ex: registro já excluído) continuam como estão.
+UPDATE activities_ledger l
+SET action_type = 'MANUAL', activity_type_id = t.id, activity_type_label = t.label
+FROM activity_types t
+WHERE l.action_type IN ('TRIAGE', 'SERVICE', 'FOLLOW_UP', 'NOTE')
+  AND t.key = CASE l.action_type
+                  WHEN 'TRIAGE' THEN 'triagem'
+                  WHEN 'SERVICE' THEN 'atendimento'
+                  WHEN 'FOLLOW_UP' THEN 'acompanhamento'
+                  ELSE 'anotacao'
+              END
+  AND t.category_id = CASE l.entity_type
+                          WHEN 'clients' THEN (SELECT c.id FROM categories c
+                                               WHERE c.table_reference = 'clients' ORDER BY c.created_at LIMIT 1)
+                          WHEN 'dynamic_entities' THEN (SELECT e.category_id FROM dynamic_entities e
+                                                        WHERE e.id = l.entity_id)
+                      END;
+
 
 -- ==============================================================================
 -- 4. MÓDULO DE ARQUIVOS CENTRALIZADO

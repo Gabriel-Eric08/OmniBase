@@ -20,10 +20,13 @@ import com.secmulher.infra.repositories.CategoryRepository;
 public class CategoryService {
     final CategoryRepository categoryRepository;
     final AccessControlService accessControl;
+    final ActivityTypeService activityTypeService;
 
-    public CategoryService(CategoryRepository categoryRepository, AccessControlService accessControl) {
+    public CategoryService(CategoryRepository categoryRepository, AccessControlService accessControl,
+            ActivityTypeService activityTypeService) {
         this.categoryRepository = categoryRepository;
         this.accessControl = accessControl;
+        this.activityTypeService = activityTypeService;
     }
 
     public Category getCategoryById(UUID id) {
@@ -60,7 +63,9 @@ public class CategoryService {
             .isActive(Objects.requireNonNullElse(request.isActive(), true))
             .build();
 
-        return CategoryResponse.from(categoryRepository.saveAndFlush(category));
+        Category saved = categoryRepository.saveAndFlush(category);
+        activityTypeService.createDefaults(saved);
+        return CategoryResponse.from(saved);
     }
 
     @Transactional
@@ -85,6 +90,12 @@ public class CategoryService {
     @Transactional
     public void delete(UUID id) {
         accessControl.requireAdmin();
-        categoryRepository.delete(getCategoryById(id));
+        Category category = getCategoryById(id);
+        // Os tipos de registro saem junto com a categoria, mas o histórico (imutável) não pode perder o tipo
+        if (activityTypeService.isUsedInCategory(id)) {
+            throw new ConflictException("A categoria '" + category.getName() + "' tem registros manuais na linha do "
+                + "tempo e não pode ser excluída. Desative-a com isActive: false");
+        }
+        categoryRepository.delete(category);
     }
 }

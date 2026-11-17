@@ -13,7 +13,8 @@ import com.secmulher.infra.entities.Permission;
 import com.secmulher.infra.entities.enums.ConfidentialityLevel;
 
 // O que o usuário atual pode fazer em uma categoria.
-// readableColumns/writableColumns nulos significam "todas as colunas".
+// readableColumns/writableColumns nulos significam "todas as colunas";
+// allowedActivityTypes nulo significa "todos os tipos de registro manual".
 public record CategoryAccess(
     UUID categoryId,
     boolean canRead,
@@ -22,14 +23,20 @@ public record CategoryAccess(
     boolean canDelete,
     Set<String> readableColumns,
     Set<String> writableColumns,
-    ConfidentialityLevel maxConfidentiality
+    ConfidentialityLevel maxConfidentiality,
+    Set<String> allowedActivityTypes
 ) {
     public static CategoryAccess full(UUID categoryId) {
-        return new CategoryAccess(categoryId, true, true, true, true, null, null, ConfidentialityLevel.CONFIDENTIAL);
+        return new CategoryAccess(categoryId, true, true, true, true, null, null, ConfidentialityLevel.CONFIDENTIAL, null);
     }
 
     public static CategoryAccess none(UUID categoryId) {
-        return new CategoryAccess(categoryId, false, false, false, false, Set.of(), Set.of(), ConfidentialityLevel.INTERNAL);
+        return new CategoryAccess(categoryId, false, false, false, false, Set.of(), Set.of(),
+            ConfidentialityLevel.INTERNAL, Set.of());
+    }
+
+    public boolean canRegisterActivityType(String key) {
+        return canUpdate && (allowedActivityTypes == null || allowedActivityTypes.contains(key));
     }
 
     public static CategoryAccess from(Permission permission) {
@@ -42,7 +49,8 @@ public record CategoryAccess(
             Boolean.TRUE.equals(permission.getCanDelete()),
             columnSet(columns.get("read")),
             columnSet(columns.get("write")),
-            permission.getMaxConfidentiality() != null ? permission.getMaxConfidentiality() : ConfidentialityLevel.INTERNAL
+            permission.getMaxConfidentiality() != null ? permission.getMaxConfidentiality() : ConfidentialityLevel.INTERNAL,
+            permission.getAllowedActivityTypes() != null ? Set.copyOf(permission.getAllowedActivityTypes()) : null
         );
     }
 
