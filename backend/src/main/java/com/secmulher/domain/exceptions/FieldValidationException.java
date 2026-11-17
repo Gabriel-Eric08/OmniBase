@@ -7,7 +7,11 @@ public class FieldValidationException extends RuntimeException {
     private final Map<String, String> errors;
 
     public FieldValidationException(Map<String, String> errors) {
-        super("Campos customizados inválidos");
+        this("Campos customizados inválidos", errors);
+    }
+
+    public FieldValidationException(String message, Map<String, String> errors) {
+        super(message);
         this.errors = errors;
     }
 

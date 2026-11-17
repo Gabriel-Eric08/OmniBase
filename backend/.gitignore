@@ -34,3 +34,6 @@ build/
 
 ### Documentos enviados (FileStorage local) ###
 /storage/
+
+### Variáveis de ambiente locais ###
+.env

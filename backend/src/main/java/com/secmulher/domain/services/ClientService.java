@@ -108,7 +108,22 @@ public class ClientService {
         Client client = getClientById(id);
         CategoryAccess access = access().requireUpdate();
 
-        String nome = access.canWriteColumn(NOME) ? request.nome() : client.getNome();
+        // Alterar coluna sem permissão de escrita é recusado; reenviar o valor atual é aceito
+        Map<String, Object[]> sent = new LinkedHashMap<>();
+        sent.put(NOME, new Object[] { request.nome(), client.getNome() });
+        sent.put(DATA_NASCIMENTO, new Object[] { request.dataNascimento(), client.getDataNascimento() });
+        sent.put(TELEFONE, new Object[] { request.telefone(), client.getTelefone() });
+        sent.put(SOB_RISCO, new Object[] { request.sobRisco(), client.getSobRisco() });
+        List<String> forbidden = sent.entrySet().stream()
+            .filter(entry -> !access.canWriteColumn(entry.getKey()))
+            .filter(entry -> entry.getValue()[0] != null && !Objects.equals(entry.getValue()[0], entry.getValue()[1]))
+            .map(Map.Entry::getKey)
+            .toList();
+        if (!forbidden.isEmpty()) {
+            throw new ForbiddenException("Sem permissão para alterar: " + String.join(", ", forbidden));
+        }
+
+        String nome =access.canWriteColumn(NOME) ? request.nome() : client.getNome();
         var dataNascimento = access.canWriteColumn(DATA_NASCIMENTO) ? request.dataNascimento() : client.getDataNascimento();
         String telefone = access.canWriteColumn(TELEFONE) ? request.telefone() : client.getTelefone();
         Boolean sobRisco = access.canWriteColumn(SOB_RISCO)

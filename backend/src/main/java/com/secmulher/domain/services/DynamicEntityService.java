@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -24,11 +25,10 @@ import com.secmulher.infra.entities.Category;
 import com.secmulher.infra.entities.DynamicEntity;
 import com.secmulher.infra.entities.enums.ActivityType;
 import com.secmulher.infra.repositories.DynamicEntityRepository;
-
-import tools.jackson.databind.json.JsonMapper;
+import com.secmulher.infra.repositories.DynamicEntitySearchRepository;
 
 // Regras de coluna: na criação, campos sem permissão de escrita não podem ser enviados;
-// na edição, eles são preservados com o valor atual, independentemente do que vier.
+// na edição, alterá-los é recusado (reenviar o valor atual é aceito) e os ocultos são preservados.
 @Service
 public class DynamicEntityService {
     final DynamicEntityRepository dynamicEntityRepository;
@@ -37,18 +37,18 @@ public class DynamicEntityService {
     final ActivityService activityService;
     final FileService fileService;
     final AccessControlService accessControl;
-    final JsonMapper jsonMapper;
+    final DynamicEntitySearchRepository dynamicEntitySearchRepository;
 
     public DynamicEntityService(DynamicEntityRepository dynamicEntityRepository, CategoryService categoryService,
             CategoryFieldService categoryFieldService, ActivityService activityService, FileService fileService,
-            AccessControlService accessControl, JsonMapper jsonMapper) {
+            AccessControlService accessControl, DynamicEntitySearchRepository dynamicEntitySearchRepository) {
         this.dynamicEntityRepository = dynamicEntityRepository;
         this.categoryService = categoryService;
         this.categoryFieldService = categoryFieldService;
         this.activityService = activityService;
         this.fileService = fileService;
         this.accessControl = accessControl;
-        this.jsonMapper = jsonMapper;
+        this.dynamicEntitySearchRepository = dynamicEntitySearchRepository;
     }
 
     private DynamicEntity getDynamicEntityById(UUID id) {
@@ -106,19 +106,16 @@ public class DynamicEntityService {
         return DynamicEntityResponse.from(entity, access);
     }
 
-    // Filtrar por campo oculto revelaria o valor dele, então é proibido
+    // Filtros tipados por operador; filtrar ou ordenar por campo oculto revelaria o valor dele, então é proibido
     @Transactional(readOnly = true)
     public List<DynamicEntityResponse> search(DynamicEntitySearchRequest request) {
         categoryService.getCategoryById(request.categoryId());
         CategoryAccess access = accessControl.forCategory(request.categoryId()).requireRead();
-        Map<String, Object> fields = request.fields() != null ? request.fields() : Map.of();
 
-        List<String> hidden = access.hiddenColumns(fields.keySet());
-        if (!hidden.isEmpty()) {
-            throw new ForbiddenException("Sem permissão para filtrar por: " + String.join(", ", hidden));
-        }
+        var compiled = DynamicEntityFilterCompiler.compile(
+            request, categoryFieldService.getFields(request.categoryId()), access);
 
-        return dynamicEntityRepository.searchByCustomFields(request.categoryId(), jsonMapper.writeValueAsString(fields))
+        return dynamicEntitySearchRepository.search(request.categoryId(), compiled.criteria(), compiled.sort())
             .stream().map(entity -> DynamicEntityResponse.from(entity, access)).toList();
     }
 
@@ -155,6 +152,19 @@ public class DynamicEntityService {
         }
 
         Map<String, Object> oldFields = entity.getCustomFields() != null ? entity.getCustomFields() : Map.of();
+
+        // Alterar campo sem permissão de escrita é recusado; reenviar o valor atual é aceito
+        CategoryAccess writeAccess = access;
+        List<String> forbidden = request.customFields().entrySet().stream()
+            .filter(entry -> !writeAccess.canWriteColumn(entry.getKey()))
+            .filter(entry -> entry.getValue() != null && !Objects.equals(entry.getValue(), oldFields.get(entry.getKey())))
+            .map(Map.Entry::getKey)
+            .sorted()
+            .toList();
+        if (!forbidden.isEmpty()) {
+            throw new ForbiddenException("Sem permissão para alterar: " + String.join(", ", forbidden));
+        }
+
         Map<String, Object> merged = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : request.customFields().entrySet()) {
             if (access.canWriteColumn(entry.getKey())) {

@@ -6,9 +6,13 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.secmulher.domain.access.CategoryAccess;
+import com.secmulher.domain.enums.FilterOperator;
 import com.secmulher.infra.entities.DynamicEntity;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 
 public final class DynamicEntityDtos {
     private DynamicEntityDtos() {}
@@ -18,11 +22,32 @@ public final class DynamicEntityDtos {
         @NotNull Map<String, Object> customFields
     ) {}
 
-    // Filtra registros cujo custom_fields contenha todos os pares informados (igualdade exata)
+    // Busca em uma categoria. Todos os critérios são combinados com E:
+    // - fields: atalho de igualdade exata ({"regiao": "Sul"})
+    // - filters: filtros tipados por operador (ver FilterOperator e CategoryFieldResponse.filterOperators)
+    // - sort: ordenação por um campo customizado ou por createdAt/updatedAt (padrão: createdAt desc)
     public record DynamicEntitySearchRequest(
         @NotNull UUID categoryId,
-        Map<String, Object> fields
+        Map<String, Object> fields,
+        List<@Valid @NotNull FieldFilter> filters,
+        @Valid SortRequest sort
     ) {}
+
+    // value depende do operador: ausente em IS_EMPTY/NOT_EMPTY, lista em IN, [mínimo, máximo] em BETWEEN
+    public record FieldFilter(
+        @NotBlank String field,
+        @NotNull FilterOperator operator,
+        Object value
+    ) {}
+
+    public record SortRequest(
+        @NotBlank String field,
+        @Pattern(regexp = "(?i)asc|desc", message = "deve ser 'asc' ou 'desc'") String direction
+    ) {
+        public boolean descending() {
+            return direction == null || "desc".equalsIgnoreCase(direction);
+        }
+    }
 
     // Campos sem permissão de leitura são removidos de customFields e listados em hiddenFields
     public record DynamicEntityResponse(

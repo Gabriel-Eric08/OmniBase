@@ -111,9 +111,27 @@ public class CategoryFieldService {
             throw new BusinessException("A chave de um campo não pode ser alterada; crie um novo campo");
         }
 
+        // Os dados gravados precisam continuar válidos para o tipo, senão filtros e validação quebram
+        UUID usedCategory = field.getCategory().getId();
+        if (field.getFieldType() != request.fieldType()
+                && dynamicEntityRepository.existsCustomFieldKey(usedCategory, field.getKey())) {
+            throw new ConflictException("O campo '" + field.getKey() + "' já tem dados; o tipo não pode ser alterado. "
+                + "Crie um novo campo ou remova este com purgeData=true");
+        }
+        List<String> options = normalizeOptions(request);
+        if (request.fieldType() == FieldType.LIST && field.getOptions() != null) {
+            List<String> removed = field.getOptions().stream().filter(option -> !options.contains(option)).toList();
+            List<String> inUse = removed.isEmpty() ? List.of()
+                : dynamicEntityRepository.findUsedValues(usedCategory, field.getKey(), removed);
+            if (!inUse.isEmpty()) {
+                throw new ConflictException("Opções ainda usadas em registros não podem ser removidas: "
+                    + String.join(", ", inUse.stream().sorted().toList()));
+            }
+        }
+
         field.setLabel(request.label());
         field.setFieldType(request.fieldType());
-        field.setOptions(normalizeOptions(request));
+        field.setOptions(options);
         if (request.isRequired() != null) {
             field.setIsRequired(request.isRequired());
         }

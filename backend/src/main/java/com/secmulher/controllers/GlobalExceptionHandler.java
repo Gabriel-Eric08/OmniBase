@@ -1,11 +1,13 @@
 package com.secmulher.controllers;
 
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -17,6 +19,8 @@ import com.secmulher.domain.exceptions.FieldValidationException;
 import com.secmulher.domain.exceptions.ForbiddenException;
 import com.secmulher.domain.exceptions.NotFoundException;
 import com.secmulher.domain.exceptions.UnauthorizedException;
+
+import tools.jackson.databind.exc.InvalidFormatException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -63,6 +67,24 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ProblemDetail handleMaxUploadSize(MaxUploadSizeExceededException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONTENT_TOO_LARGE, "Arquivo excede o tamanho máximo permitido");
+    }
+
+    // JSON malformado ou valor que não cabe no tipo (ex: operador de filtro inexistente)
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ProblemDetail handleUnreadable(HttpMessageNotReadableException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Corpo da requisição inválido");
+        if (ex.getCause() instanceof InvalidFormatException invalid && invalid.getTargetType() != null) {
+            String path = invalid.getPath().stream()
+                .map(ref -> ref.getPropertyName() != null ? ref.getPropertyName() : "[" + ref.getIndex() + "]")
+                .reduce((a, b) -> b.startsWith("[") ? a + b : a + "." + b)
+                .orElse("body");
+            String message = invalid.getTargetType().isEnum()
+                ? "valor '" + invalid.getValue() + "' inválido; use um de "
+                    + Arrays.toString(invalid.getTargetType().getEnumConstants())
+                : "valor '" + invalid.getValue() + "' inválido";
+            problem.setProperty("errors", Map.of(path, message));
+        }
+        return problem;
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

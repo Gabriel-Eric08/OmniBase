@@ -16,14 +16,15 @@ public interface DynamicEntityRepository extends JpaRepository<DynamicEntity, UU
 
     List<DynamicEntity> findByCategoryIdIn(Collection<UUID> categoryIds);
 
-    // Busca por conteúdo do JSONB usando o operador @> (aproveita o índice GIN)
+    // Busca com filtros fica em DynamicEntitySearchRepository
+
+    // Usado ao remover opções de um campo LIST: devolve quais delas ainda estão em uso
     @Query(value = """
-        SELECT * FROM dynamic_entities
-        WHERE category_id = :categoryId
-          AND custom_fields @> CAST(:filter AS jsonb)
-        ORDER BY created_at DESC
+        SELECT DISTINCT custom_fields ->> :fieldKey FROM dynamic_entities
+        WHERE category_id = :categoryId AND custom_fields ->> :fieldKey IN (:values)
         """, nativeQuery = true)
-    List<DynamicEntity> searchByCustomFields(@Param("categoryId") UUID categoryId, @Param("filter") String filterJson);
+    List<String> findUsedValues(@Param("categoryId") UUID categoryId, @Param("fieldKey") String fieldKey,
+        @Param("values") Collection<String> values);
 
     // jsonb_exists equivale ao operador ?, que conflita com os placeholders do JDBC
     @Query(value = """

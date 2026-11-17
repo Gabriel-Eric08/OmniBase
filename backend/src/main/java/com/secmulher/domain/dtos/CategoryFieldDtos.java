@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
+import com.secmulher.domain.enums.FilterOperator;
 import com.secmulher.infra.entities.CategoryField;
 import com.secmulher.infra.entities.enums.FieldType;
 
@@ -37,6 +38,7 @@ public final class CategoryFieldDtos {
         Boolean isRequired,
         List<String> options,
         Integer position,
+        List<FilterOperator> filterOperators,  // operadores aceitos na busca para este tipo de campo
         LocalDateTime createdAt
     ) {
         public static CategoryFieldResponse from(CategoryField field) {
@@ -49,6 +51,7 @@ public final class CategoryFieldDtos {
                 field.getIsRequired(),
                 field.getOptions(),
                 field.getPosition(),
+                FilterOperator.forType(field.getFieldType()),
                 field.getCreatedAt()
             );
         }
