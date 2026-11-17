@@ -11,11 +11,15 @@ import jakarta.validation.constraints.NotNull;
 public final class DynamicEntityDtos {
     private DynamicEntityDtos() {}
 
-    // createdBy vem no corpo enquanto não há autenticação
     public record DynamicEntityRequest(
         @NotNull UUID categoryId,
-        @NotNull Map<String, Object> customFields,
-        UUID createdBy
+        @NotNull Map<String, Object> customFields
+    ) {}
+
+    // Filtra registros cujo custom_fields contenha todos os pares informados (igualdade exata)
+    public record DynamicEntitySearchRequest(
+        @NotNull UUID categoryId,
+        Map<String, Object> fields
     ) {}
 
     public record DynamicEntityResponse(

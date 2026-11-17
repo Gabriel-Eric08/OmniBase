@@ -68,6 +68,24 @@ CREATE TABLE dynamic_entities (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Índices para listagem por categoria e buscas por conteúdo (operador @>)
+CREATE INDEX idx_dynamic_entities_category ON dynamic_entities(category_id);
+CREATE INDEX idx_dynamic_entities_custom_fields ON dynamic_entities USING GIN (custom_fields);
+
+-- Definição dos campos customizáveis de cada categoria dinâmica (o "formulário")
+CREATE TABLE category_fields (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    category_id UUID NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    field_key VARCHAR(100) NOT NULL,         -- Chave usada no JSONB (ex: 'bairro')
+    label VARCHAR(255) NOT NULL,             -- Rótulo exibido (ex: 'Bairro')
+    field_type VARCHAR(20) NOT NULL,         -- TEXT, NUMBER, DATE, BOOLEAN, LIST
+    is_required BOOLEAN DEFAULT FALSE,
+    options JSONB,                           -- Opções válidas quando field_type = 'LIST'
+    position INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(category_id, field_key)
+);
+
 -- ==============================================================================
 -- 3. MÓDULO DE HISTÓRICO / LEDGER
 -- ==============================================================================
@@ -89,8 +107,14 @@ CREATE TABLE activities_ledger (
     
     -- O "Ledger" para auditoria de segurança (O que mudou)
     -- Ex: {"campo": "telefone", "antigo": "1111", "novo": "2222"}
-    changes JSONB, 
-    
+    changes JSONB,
+
+    -- Funcionário que realizou o atendimento (pode não ser usuário do sistema)
+    responsible_employee VARCHAR(255),
+
+    -- Quando a atividade aconteceu (pode ser anterior ao registro no sistema)
+    occurred_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -116,7 +140,11 @@ CREATE TABLE files (
     original_name VARCHAR(255) NOT NULL,
     storage_path VARCHAR(500) NOT NULL, -- Caminho no S3, GCP, ou disco local
     file_size_bytes BIGINT,
-    
+    content_type VARCHAR(255),
+
+    -- Nível de sigilo: INTERNAL (público interno), RESTRICTED (restrito), CONFIDENTIAL (sigiloso)
+    confidentiality_level VARCHAR(20) NOT NULL DEFAULT 'RESTRICTED',
+
     uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

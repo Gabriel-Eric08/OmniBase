@@ -62,7 +62,7 @@ public class PermissionService {
             .allowedColumns(Objects.requireNonNullElse(request.allowedColumns(), new HashMap<>()))
             .build();
 
-        return PermissionResponse.from(permissionRepository.save(permission));
+        return PermissionResponse.from(permissionRepository.saveAndFlush(permission));
     }
 
     @Transactional
@@ -95,7 +95,7 @@ public class PermissionService {
             permission.setAllowedColumns(request.allowedColumns());
         }
 
-        return PermissionResponse.from(permissionRepository.save(permission));
+        return PermissionResponse.from(permissionRepository.saveAndFlush(permission));
     }
 
     @Transactional

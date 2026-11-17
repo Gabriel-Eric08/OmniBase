@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.secmulher.domain.dtos.DynamicEntityDtos.DynamicEntityRequest;
 import com.secmulher.domain.dtos.DynamicEntityDtos.DynamicEntityResponse;
+import com.secmulher.domain.dtos.DynamicEntityDtos.DynamicEntitySearchRequest;
 import com.secmulher.domain.services.DynamicEntityService;
 
 import jakarta.validation.Valid;
@@ -38,6 +39,12 @@ public class DynamicEntityController {
     @GetMapping("/{id}")
     public DynamicEntityResponse findById(@PathVariable UUID id) {
         return dynamicEntityService.findById(id);
+    }
+
+    // POST porque o filtro é um objeto JSON arbitrário (campos customizados da categoria)
+    @PostMapping("/search")
+    public List<DynamicEntityResponse> search(@RequestBody @Valid DynamicEntitySearchRequest request) {
+        return dynamicEntityService.search(request);
     }
 
     @PostMapping

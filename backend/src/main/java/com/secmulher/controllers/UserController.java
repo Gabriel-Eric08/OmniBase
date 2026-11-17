@@ -14,8 +14,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.secmulher.domain.dtos.ActivityDtos.ActivityResponse;
 import com.secmulher.domain.dtos.UserDtos.UserRequest;
 import com.secmulher.domain.dtos.UserDtos.UserResponse;
+import com.secmulher.domain.services.ActivityService;
 import com.secmulher.domain.services.UserService;
 
 import jakarta.validation.Valid;
@@ -24,9 +26,11 @@ import jakarta.validation.Valid;
 @RequestMapping("/users")
 public class UserController {
     final UserService userService;
+    final ActivityService activityService;
 
-    public UserController(UserService userService) {
+    public UserController(UserService userService, ActivityService activityService) {
         this.userService = userService;
+        this.activityService = activityService;
     }
 
     @GetMapping
@@ -37,6 +41,12 @@ public class UserController {
     @GetMapping("/{id}")
     public UserResponse findById(@PathVariable UUID id) {
         return userService.findById(id);
+    }
+
+    // Auditoria: tudo o que um usuário fez no sistema
+    @GetMapping("/{id}/activities")
+    public List<ActivityResponse> activities(@PathVariable UUID id) {
+        return activityService.getByUser(id);
     }
 
     @PostMapping

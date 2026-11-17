@@ -13,13 +13,11 @@ import jakarta.validation.constraints.Size;
 public final class ClientDtos {
     private ClientDtos() {}
 
-    // createdBy vem no corpo enquanto não há autenticação
     public record ClientRequest(
         @NotBlank @Size(max = 255) String nome,
         @Past LocalDate dataNascimento,
         @Size(max = 50) String telefone,
-        Boolean sobRisco,
-        UUID createdBy
+        Boolean sobRisco
     ) {}
 
     public record ClientResponse(

@@ -62,7 +62,7 @@ public class UserService {
             .isActive(Objects.requireNonNullElse(request.isActive(), true))
             .build();
 
-        return UserResponse.from(userRepository.save(user));
+        return UserResponse.from(userRepository.saveAndFlush(user));
     }
 
     @Transactional
@@ -85,7 +85,7 @@ public class UserService {
             user.setIsActive(request.isActive());
         }
 
-        return UserResponse.from(userRepository.save(user));
+        return UserResponse.from(userRepository.saveAndFlush(user));
     }
 
     @Transactional

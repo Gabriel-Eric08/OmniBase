@@ -50,7 +50,7 @@ public class CategoryService {
             .isActive(Objects.requireNonNullElse(request.isActive(), true))
             .build();
 
-        return CategoryResponse.from(categoryRepository.save(category));
+        return CategoryResponse.from(categoryRepository.saveAndFlush(category));
     }
 
     @Transactional
@@ -68,7 +68,7 @@ public class CategoryService {
             category.setIsActive(request.isActive());
         }
 
-        return CategoryResponse.from(categoryRepository.save(category));
+        return CategoryResponse.from(categoryRepository.saveAndFlush(category));
     }
 
     @Transactional
